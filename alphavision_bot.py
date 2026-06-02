@@ -224,6 +224,27 @@ def fetch_screener_data(ticker: str) -> Dict:
             data["_view"]                    = view
             data["_source"]                  = "screener.in"
 
+            # Extract current price and market cap from the top of the page
+            try:
+                price_span = soup.find("span", class_="number")
+                if not price_span:
+                    price_span = soup.select_one("#top-ratios li:first-child .number")
+                # Try the top-ratios section for Current Price and Market Cap
+                top_ratios = soup.find(id="top-ratios")
+                if top_ratios:
+                    for li in top_ratios.find_all("li"):
+                        label = li.get_text(" ", strip=True).lower()
+                        val_span = li.find("span", class_="number")
+                        if not val_span:
+                            continue
+                        val = _parse_number(val_span.get_text(strip=True))
+                        if "current price" in label or "price" in label:
+                            data["current_price"] = val
+                        elif "market cap" in label:
+                            data["market_cap_cr"] = val
+            except Exception:
+                pass
+
             print(f"[Screener:{view}] ✓", end=" ")
             break
 
@@ -877,42 +898,24 @@ Institutional tone. No bullet points. No headers. No fluff."""
 
 def _fetch_nse_quote(symbol: str) -> Dict:
     """
-    Fetch current price and market cap from NSE India public API.
-    No rate limiting issues — NSE is the primary exchange for these stocks.
+    Get current price and market cap from Screener.in data (already fetched).
+    Falls back to deriving market cap from EPS × P/E if not directly available.
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Referer": "https://www.nseindia.com/",
+    screener = _screener_cache.get(symbol, {})
+    price    = screener.get("current_price") or 0
+    mc_cr    = screener.get("market_cap_cr") or 0
+
+    # If market cap not scraped, derive from latest EPS and median P/E
+    if mc_cr == 0 and price == 0:
+        return {}
+
+    return {
+        "currentPrice": price,
+        "marketCap_cr": mc_cr,
+        "52WeekHigh":   0,
+        "52WeekLow":    0,
+        "symbol":       symbol,
     }
-    session = requests.Session()
-    session.headers.update(headers)
-    try:
-        # Warm up session with a cookie
-        session.get("https://www.nseindia.com", timeout=10)
-        time.sleep(1)
-        resp = session.get(
-            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            pd_data = data.get("priceInfo", {})
-            md_data = data.get("metadata", {})
-            price = pd_data.get("lastPrice") or pd_data.get("close") or 0
-            shares = md_data.get("issuedSize") or 0
-            market_cap_cr = (price * shares) / 1e7 if shares else 0
-            return {
-                "currentPrice":  price,
-                "marketCap_cr":  round(market_cap_cr, 0),
-                "52WeekHigh":    pd_data.get("weekHighLow", {}).get("max", 0),
-                "52WeekLow":     pd_data.get("weekHighLow", {}).get("min", 0),
-                "symbol":        symbol,
-            }
-    except Exception as e:
-        print(f"[NSE] {symbol} error: {e}", end=" ")
-    return {}
 
 
 def build_info_from_screener(symbol: str, screener: Dict, nse_quote: Dict) -> Dict:
@@ -926,9 +929,9 @@ def build_info_from_screener(symbol: str, screener: Dict, nse_quote: Dict) -> Di
                 return v
         return None
 
-    price        = nse_quote.get("currentPrice") or 0
-    market_cap_cr = nse_quote.get("marketCap_cr") or 0
-    market_cap_inr = market_cap_cr * 1e7  # in rupees
+    price         = nse_quote.get("currentPrice") or screener.get("current_price") or 0
+    market_cap_cr = nse_quote.get("marketCap_cr") or screener.get("market_cap_cr") or 0
+    market_cap_inr = market_cap_cr * 1e7
 
     pat_series   = [v for v in screener.get("pat_10y", []) if v is not None]
     rev_series   = [v for v in screener.get("revenue_10y", []) if v is not None]
@@ -1017,12 +1020,12 @@ def _fetch_yf_info(ticker: str, retries: int = 4) -> Dict:
 def analyse_stock(symbol: str) -> Optional[Dict]:
     stock_name = symbol
 
-    # Fetch from Screener.in and NSE (no yfinance)
+    # Fetch from Screener.in only — price + all fundamentals
     screener  = fetch_screener_data(symbol)
-    nse_quote = _fetch_nse_quote(symbol)
+    nse_quote = _fetch_nse_quote(symbol)  # reads from screener cache
 
-    if not nse_quote.get("currentPrice"):
-        print(f"No price data from NSE — skipping")
+    if not nse_quote.get("currentPrice") and not screener.get("market_cap_cr"):
+        print(f"No price/market cap data — skipping")
         return None
 
     yf_info = build_info_from_screener(symbol, screener, nse_quote)
