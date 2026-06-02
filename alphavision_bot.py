@@ -16,7 +16,6 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from telegram import Bot
 from telegram.error import TelegramError
-import yfinance as yf
 import pandas as pd
 import numpy as np
 from anthropic import Anthropic
@@ -30,11 +29,26 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 NIFTY_50_STOCKS = [
-    "TCS.NS", "RELIANCE.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-    "SBIN.NS", "BAJFINANCE.NS", "LT.NS", "MARUTI.NS", "ASIANPAINT.NS",
-    "SUNPHARMA.NS", "WIPRO.NS", "DRREDDY.NS", "HCLTECH.NS", "TECHM.NS",
-    "TATASTEEL.NS", "ADANIPORTS.NS", "POWERGRID.NS", "NTPC.NS", "IOC.NS",
+    "TCS", "RELIANCE", "INFY", "HDFCBANK", "ICICIBANK",
+    "SBIN", "BAJFINANCE", "LT", "MARUTI", "ASIANPAINT",
+    "SUNPHARMA", "WIPRO", "DRREDDY", "HCLTECH", "TECHM",
+    "TATASTEEL", "ADANIPORTS", "POWERGRID", "NTPC", "IOC",
 ]
+
+# Sector mapping — replaces yfinance sector lookup
+STOCK_SECTOR_MAP = {
+    "TCS": "Technology", "INFY": "Technology", "WIPRO": "Technology",
+    "HCLTECH": "Technology", "TECHM": "Technology",
+    "HDFCBANK": "Financial Services", "ICICIBANK": "Financial Services",
+    "SBIN": "Financial Services", "BAJFINANCE": "Financial Services",
+    "RELIANCE": "Energy", "NTPC": "Utilities", "POWERGRID": "Utilities",
+    "IOC": "Energy", "ADANIPORTS": "Industrials",
+    "LT": "Industrials",
+    "MARUTI": "Consumer Cyclical",
+    "ASIANPAINT": "Consumer Defensive",
+    "SUNPHARMA": "Healthcare", "DRREDDY": "Healthcare",
+    "TATASTEEL": "Basic Materials",
+}
 
 BANKING_SECTORS = {"Financial Services", "Banks", "NBFC"}
 LARGE_CAP_THRESHOLD = 20_000_00_00_000   # ₹20,000 Cr in paise → use marketCap in USD, so approx $2.5B
@@ -861,54 +875,168 @@ Institutional tone. No bullet points. No headers. No fluff."""
         return f"Thesis unavailable: {str(e)[:80]}"
 
 
-def _fetch_yf_info(ticker: str, retries: int = 4) -> Dict:
-    """Fetch yfinance info with retry, backoff, and session headers to avoid 429s."""
-    session = requests.Session()
-    session.headers.update({
+def _fetch_nse_quote(symbol: str) -> Dict:
+    """
+    Fetch current price and market cap from NSE India public API.
+    No rate limiting issues — NSE is the primary exchange for these stocks.
+    """
+    headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    })
-    for attempt in range(retries):
-        try:
-            t = yf.Ticker(ticker, session=session)
-            info = t.info or {}
-            if info.get("marketCap"):
-                return info
-            # If no marketCap, wait and retry
-            time.sleep(3 + attempt * 3)
-        except Exception as e:
-            wait = 10 + attempt * 10
-            if attempt < retries - 1:
-                time.sleep(wait)
-            else:
-                print(f"yfinance failed after {retries} attempts: {e}", end=" ")
+                      "Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.nseindia.com/",
+    }
+    session = requests.Session()
+    session.headers.update(headers)
+    try:
+        # Warm up session with a cookie
+        session.get("https://www.nseindia.com", timeout=10)
+        time.sleep(1)
+        resp = session.get(
+            f"https://www.nseindia.com/api/quote-equity?symbol={symbol}",
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            pd_data = data.get("priceInfo", {})
+            md_data = data.get("metadata", {})
+            price = pd_data.get("lastPrice") or pd_data.get("close") or 0
+            shares = md_data.get("issuedSize") or 0
+            market_cap_cr = (price * shares) / 1e7 if shares else 0
+            return {
+                "currentPrice":  price,
+                "marketCap_cr":  round(market_cap_cr, 0),
+                "52WeekHigh":    pd_data.get("weekHighLow", {}).get("max", 0),
+                "52WeekLow":     pd_data.get("weekHighLow", {}).get("min", 0),
+                "symbol":        symbol,
+            }
+    except Exception as e:
+        print(f"[NSE] {symbol} error: {e}", end=" ")
     return {}
+
+
+def build_info_from_screener(symbol: str, screener: Dict, nse_quote: Dict) -> Dict:
+    """
+    Build a unified info dict from Screener.in data + NSE quote.
+    This replaces the yfinance info dict throughout the scoring pipeline.
+    """
+    def latest(lst):
+        for v in reversed(lst or []):
+            if v is not None:
+                return v
+        return None
+
+    price        = nse_quote.get("currentPrice") or 0
+    market_cap_cr = nse_quote.get("marketCap_cr") or 0
+    market_cap_inr = market_cap_cr * 1e7  # in rupees
+
+    pat_series   = [v for v in screener.get("pat_10y", []) if v is not None]
+    rev_series   = [v for v in screener.get("revenue_10y", []) if v is not None]
+    debt_series  = [v for v in screener.get("debt_10y", []) if v is not None]
+    equity_series= [v for v in screener.get("equity_10y", []) if v is not None]
+    ebitda_series= [v for v in screener.get("ebitda_10y", []) if v is not None]
+    cfo_series   = [v for v in screener.get("cfo_10y", []) if v is not None]
+    capex_series = [v for v in screener.get("capex_10y", []) if v is not None]
+    eps_series   = [v for v in screener.get("eps_10y", []) if v is not None]
+
+    pat_latest   = latest(pat_series) or 0
+    rev_latest   = latest(rev_series) or 0
+    debt_latest  = latest(debt_series) or 0
+    equity_latest= latest(equity_series) or 0
+    ebitda_latest= latest(ebitda_series) or 0
+    cfo_latest   = latest(cfo_series) or 0
+    capex_latest = latest(capex_series) or 0
+    eps_latest   = latest(eps_series) or 0
+
+    # FCF
+    fcf_latest = (cfo_latest - abs(capex_latest)) if (cfo_latest and capex_latest) else 0
+    fcf_yield  = (fcf_latest / max(market_cap_cr, 1)) * 100 if market_cap_cr else 0
+
+    # D/E
+    de_ratio = screener.get("de_ratio_latest") or (
+        debt_latest / max(equity_latest, 1) if equity_latest else 0
+    )
+
+    # Book value per share (approx)
+    book_value = equity_latest  # in Cr; per share needs share count
+
+    # Profit margin
+    profit_margin = (pat_latest / max(rev_latest, 1)) * 100 if rev_latest else 0
+
+    # ROE
+    roe = (latest(screener.get("roe_10y", [])) or 0)
+
+    # Interest coverage
+    ic = screener.get("interest_coverage_latest") or 0
+
+    # Sector
+    sector = STOCK_SECTOR_MAP.get(symbol, "")
+
+    return {
+        "currentPrice":         price,
+        "marketCap":            market_cap_inr,
+        "marketCap_cr":         market_cap_cr,
+        "sector":               sector,
+        "bookValue":            book_value,
+        "trailingEps":          eps_latest,
+        "returnOnEquity":       roe / 100 if roe else 0,
+        "debtToEquity":         de_ratio * 100,  # pillar functions divide by 100
+        "freeCashFlow":         fcf_latest * 1e7,  # convert Cr to rupees
+        "totalDebt":            debt_latest * 1e7,
+        "totalCash":            0,
+        "ebitda":               ebitda_latest * 1e7,
+        "totalRevenue":         rev_latest * 1e7,
+        "netIncomeToCommon":    pat_latest * 1e7,
+        "profitMargins":        profit_margin / 100,
+        "interestExpense":      0,
+        "totalAssets":          (equity_latest + debt_latest) * 1e7,
+        "currentAssets":        0,
+        "currentLiabilities":   0,
+        "retainedEarnings":     0,
+        "depreciationAndAmortization": 0,
+        "dividendRate":         1 if latest(screener.get("pat_10y", [])) else 0,
+        "beta":                 1.0,
+        "averageVolume":        1_000_000,  # assume liquid for Nifty 50
+        "52WeekHigh":           nse_quote.get("52WeekHigh", 0),
+        "52WeekLow":            nse_quote.get("52WeekLow", 0),
+    }
+
+
+def _fetch_yf_info(ticker: str, retries: int = 4) -> Dict:
+    """Kept for compatibility — now delegates to NSE + Screener pipeline."""
+    symbol = ticker.replace(".NS", "").replace(".BO", "")
+    screener = fetch_screener_data(symbol)
+    nse_quote = _fetch_nse_quote(symbol)
+    if not nse_quote.get("currentPrice"):
+        return {}
+    return build_info_from_screener(symbol, screener, nse_quote)
 
 
 # ==================== FULL STOCK ANALYSIS ====================
 
-def analyse_stock(ticker: str) -> Optional[Dict]:
-    stock_name = ticker.replace(".NS", "").replace(".BO", "")
+def analyse_stock(symbol: str) -> Optional[Dict]:
+    stock_name = symbol
 
-    # Stagger yfinance calls — cloud IPs get rate-limited aggressively
-    time.sleep(4)
-    yf_info  = _fetch_yf_info(ticker)
-    screener = fetch_screener_data(ticker)
+    # Fetch from Screener.in and NSE (no yfinance)
+    screener  = fetch_screener_data(symbol)
+    nse_quote = _fetch_nse_quote(symbol)
+
+    if not nse_quote.get("currentPrice"):
+        print(f"No price data from NSE — skipping")
+        return None
+
+    yf_info = build_info_from_screener(symbol, screener, nse_quote)
 
     if not yf_info.get("marketCap"):
-        print(f"  [{stock_name}] No yfinance data — skipping")
+        print(f"No market cap — skipping")
         return None
 
     # Pre-screening gate
-    passed, illiquid, fail_reasons = run_prescreening_gate(ticker, yf_info, screener)
+    passed, illiquid, fail_reasons = run_prescreening_gate(symbol, yf_info, screener)
     if not passed:
-        print(f"  [{stock_name}] DISQUALIFIED: {'; '.join(fail_reasons)}")
+        print(f"DISQUALIFIED: {'; '.join(fail_reasons)}")
         return {
-            "ticker":          ticker,
+            "ticker":          symbol,
             "stock_name":      stock_name,
             "gate_passed":     False,
             "fail_reasons":    fail_reasons,
@@ -922,7 +1050,7 @@ def analyse_stock(ticker: str) -> Optional[Dict]:
     p2 = score_valuation(yf_info, screener)
     p3 = score_financial_health(yf_info, screener)
     p4 = score_management_quality(yf_info, screener)
-    p5 = score_macro_sentiment(ticker, stock_name, yf_info)
+    p5 = score_macro_sentiment(symbol, stock_name, yf_info)
 
     p1["sector"] = yf_info.get("sector", "")
 
@@ -930,7 +1058,7 @@ def analyse_stock(ticker: str) -> Optional[Dict]:
     invalidation = build_invalidation_triggers(p1, p2, p3, screener)
 
     result = {
-        "ticker":          ticker,
+        "ticker":          symbol,
         "stock_name":      stock_name,
         "sector":          yf_info.get("sector", ""),
         "gate_passed":     True,
@@ -1081,11 +1209,10 @@ def run_daily_analysis():
     results      = []
     disqualified = []
 
-    for ticker in NIFTY_50_STOCKS:
-        stock_name = ticker.replace(".NS", "")
-        print(f"  [{stock_name}]", end=" ", flush=True)
+    for symbol in NIFTY_50_STOCKS:
+        print(f"  [{symbol}]", end=" ", flush=True)
         try:
-            result = analyse_stock(ticker)
+            result = analyse_stock(symbol)
             if result is None:
                 print("skip (no data)")
                 continue
