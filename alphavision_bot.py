@@ -861,16 +861,29 @@ Institutional tone. No bullet points. No headers. No fluff."""
         return f"Thesis unavailable: {str(e)[:80]}"
 
 
-def _fetch_yf_info(ticker: str, retries: int = 3) -> Dict:
-    """Fetch yfinance info with retry and backoff to handle rate limits."""
+def _fetch_yf_info(ticker: str, retries: int = 4) -> Dict:
+    """Fetch yfinance info with retry, backoff, and session headers to avoid 429s."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+    })
     for attempt in range(retries):
         try:
-            info = yf.Ticker(ticker).info or {}
+            t = yf.Ticker(ticker, session=session)
+            info = t.info or {}
             if info.get("marketCap"):
                 return info
+            # If no marketCap, wait and retry
+            time.sleep(3 + attempt * 3)
         except Exception as e:
+            wait = 10 + attempt * 10
             if attempt < retries - 1:
-                time.sleep(5 + attempt * 5)
+                time.sleep(wait)
             else:
                 print(f"yfinance failed after {retries} attempts: {e}", end=" ")
     return {}
@@ -881,8 +894,8 @@ def _fetch_yf_info(ticker: str, retries: int = 3) -> Dict:
 def analyse_stock(ticker: str) -> Optional[Dict]:
     stock_name = ticker.replace(".NS", "").replace(".BO", "")
 
-    # Load data — stagger yfinance calls to avoid rate limiting
-    time.sleep(2)
+    # Stagger yfinance calls — cloud IPs get rate-limited aggressively
+    time.sleep(4)
     yf_info  = _fetch_yf_info(ticker)
     screener = fetch_screener_data(ticker)
 
