@@ -861,14 +861,29 @@ Institutional tone. No bullet points. No headers. No fluff."""
         return f"Thesis unavailable: {str(e)[:80]}"
 
 
+def _fetch_yf_info(ticker: str, retries: int = 3) -> Dict:
+    """Fetch yfinance info with retry and backoff to handle rate limits."""
+    for attempt in range(retries):
+        try:
+            info = yf.Ticker(ticker).info or {}
+            if info.get("marketCap"):
+                return info
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(5 + attempt * 5)
+            else:
+                print(f"yfinance failed after {retries} attempts: {e}", end=" ")
+    return {}
+
+
 # ==================== FULL STOCK ANALYSIS ====================
 
 def analyse_stock(ticker: str) -> Optional[Dict]:
     stock_name = ticker.replace(".NS", "").replace(".BO", "")
 
-    # Load data
-    yf_obj   = yf.Ticker(ticker)
-    yf_info  = yf_obj.info or {}
+    # Load data — stagger yfinance calls to avoid rate limiting
+    time.sleep(2)
+    yf_info  = _fetch_yf_info(ticker)
     screener = fetch_screener_data(ticker)
 
     if not yf_info.get("marketCap"):
