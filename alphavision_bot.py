@@ -1686,7 +1686,218 @@ def save_to_db(conn, result: Dict):
     save_recommendation(result)
 
 
-# ==================== MAIN EXECUTION ====================
+# ==================== HOLDINGS MONITOR ====================
+
+def get_holdings() -> List[Dict]:
+    """Fetch all active holdings from Supabase."""
+    try:
+        db   = get_supabase()
+        rows = db.table("holdings").select("*").eq("active", True).execute().data or []
+        return rows
+    except Exception as e:
+        print(f"[Holdings] fetch error: {e}")
+        return []
+
+
+def add_holding(ticker: str, buy_price: float, quantity: int, notes: str = "") -> bool:
+    """Insert a new holding into Supabase."""
+    try:
+        db = get_supabase()
+        db.table("holdings").insert({
+            "ticker":           ticker.upper(),
+            "buy_price":        buy_price,
+            "quantity":         quantity,
+            "buy_date":         datetime.now().date().isoformat(),
+            "invested_amount":  round(buy_price * quantity, 2),
+            "notes":            notes,
+            "active":           True,
+        }).execute()
+        return True
+    except Exception as e:
+        print(f"[Holdings] insert error: {e}")
+        return False
+
+
+def monitor_holdings() -> Optional[str]:
+    """
+    Run full analysis on all active holdings.
+    Generate an alert if any holding shows a red flag:
+      - Composite score dropped ≥15 pts vs score_at_buy
+      - Pillar 3 health score < 8/20
+      - Sentiment flipped to EXTREME_GREED (overvalued, consider selling)
+      - MoS turned deeply negative (price > 120% of intrinsic)
+      - P&L summary with current STCG/LTCG tax impact
+    Returns a formatted Telegram message, or None if all clear.
+    """
+    holdings = get_holdings()
+    if not holdings:
+        return None
+
+    print(f"\n📊 Monitoring {len(holdings)} holdings...")
+
+    alerts   = []
+    all_ok   = []
+
+    for h in holdings:
+        ticker     = h["ticker"]
+        buy_price  = h["buy_price"]
+        quantity   = h["quantity"]
+        buy_date   = h.get("buy_date", "")
+        score_ref  = h.get("score_at_buy") or 65  # default if not stored
+
+        print(f"  [{ticker}]", end=" ", flush=True)
+        try:
+            result = analyse_stock(ticker)
+        except Exception as e:
+            print(f"error: {e}")
+            continue
+
+        if result is None:
+            print("no data")
+            continue
+
+        score       = result.get("composite_score", 0)
+        p2          = result.get("pillar2", {})
+        p3          = result.get("pillar3", {})
+        p5          = result.get("pillar5", {})
+        curr_price  = p2.get("current_price") or buy_price
+        sentiment   = p5.get("sentiment_signal", "NEUTRAL")
+        mos         = p2.get("best_mos_pct")
+
+        # P&L
+        pnl_per_share = curr_price - buy_price
+        pnl_total     = round(pnl_per_share * quantity, 2)
+        pnl_pct       = round((pnl_per_share / buy_price) * 100, 1) if buy_price else 0
+
+        # Holding period (days)
+        try:
+            from datetime import date
+            held_days = (date.today() - date.fromisoformat(buy_date)).days if buy_date else 0
+        except Exception:
+            held_days = 0
+        held_months = held_days / 30
+
+        # Tax on current P&L
+        invested = buy_price * quantity
+        tax_info = tax_and_breakeven(buy_price, invested)
+        if tax_info:
+            ea = tax_info  # reuse exit_analysis logic below
+        gross_gain  = pnl_total
+        if gross_gain > 0:
+            if held_months < 12:
+                tax_on_pnl  = gross_gain * STCG_RATE
+                tax_type    = "STCG 20%"
+            else:
+                taxable     = max(0, gross_gain - LTCG_EXEMPTION)
+                tax_on_pnl  = taxable * LTCG_RATE
+                tax_type    = "LTCG 12.5%"
+            net_pnl     = round(gross_gain - tax_on_pnl, 2)
+        else:
+            tax_on_pnl  = 0
+            tax_type    = "—"
+            net_pnl     = round(gross_gain, 2)
+
+        # Detect red flags
+        red_flags = []
+        score_drop = score_ref - score
+        if score_drop >= 15:
+            red_flags.append(f"Score fell {score_drop} pts ({score_ref} → {score})")
+        if (p3.get("score") or 20) < 8:
+            red_flags.append(f"Financial health weak ({p3.get('score', '?')}/20)")
+        if sentiment == "EXTREME_GREED_AVOID":
+            red_flags.append("Sentiment: extreme greed — market may be overvaluing")
+        if mos is not None and mos < -20:
+            red_flags.append(f"Stock now {abs(mos):.0f}% ABOVE intrinsic value — overvalued")
+        if pnl_pct <= -10:
+            red_flags.append(f"Down {abs(pnl_pct):.1f}% — approaching stop-loss territory")
+
+        entry = {
+            "ticker":       ticker,
+            "stock_name":   result.get("stock_name", ticker),
+            "buy_price":    buy_price,
+            "curr_price":   curr_price,
+            "quantity":     quantity,
+            "pnl_total":    pnl_total,
+            "pnl_pct":      pnl_pct,
+            "net_pnl":      net_pnl,
+            "tax_on_pnl":   round(tax_on_pnl, 2),
+            "tax_type":     tax_type,
+            "held_days":    held_days,
+            "score":        score,
+            "score_ref":    score_ref,
+            "mos":          mos,
+            "sentiment":    sentiment,
+            "red_flags":    red_flags,
+            "recommendation": result.get("recommendation", ""),
+            "p1":           result.get("pillar1", {}),
+        }
+
+        if red_flags:
+            alerts.append(entry)
+            print(f"⚠ {len(red_flags)} flag(s): {', '.join(red_flags[:1])}")
+        else:
+            all_ok.append(entry)
+            print(f"✓ {score}/100 | P&L {pnl_pct:+.1f}%")
+
+    if not alerts and not all_ok:
+        return None
+
+    # Format the full holdings report
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    msg = f"*📊 ALPHAVISION PORTFOLIO MONITOR*\n_{now} IST_\n\n"
+
+    if alerts:
+        msg += "*⚠ ACTION REQUIRED ──*\n\n"
+        for e in alerts:
+            pnl_sign = "+" if e["pnl_pct"] >= 0 else ""
+            msg += (
+                f"*{e['stock_name']}* | {e['score']}/100 | "
+                f"P&L: *{pnl_sign}{e['pnl_pct']:.1f}%* "
+                f"(₹{e['pnl_total']:+,.0f})\n"
+                f"Bought @ ₹{e['buy_price']:.0f} → Now ₹{e['curr_price']:.0f} "
+                f"| Held {e['held_days']}d\n"
+                f"Net after {e['tax_type']}: ₹{e['net_pnl']:+,.0f}\n"
+            )
+            for flag in e["red_flags"]:
+                msg += f"🚨 {flag}\n"
+            msg += "\n"
+
+    if all_ok:
+        msg += "*✅ HOLDINGS OK ──*\n\n"
+        for e in all_ok:
+            pnl_sign = "+" if e["pnl_pct"] >= 0 else ""
+            mos_str  = f" | MoS {e['mos']:.0f}%" if e["mos"] is not None else ""
+            msg += (
+                f"*{e['stock_name']}* | {e['score']}/100{mos_str} | "
+                f"*{pnl_sign}{e['pnl_pct']:.1f}%* "
+                f"(₹{e['net_pnl']:+,.0f} net of {e['tax_type']})\n"
+                f"@ ₹{e['buy_price']:.0f} → ₹{e['curr_price']:.0f} | {e['held_days']}d held\n\n"
+            )
+
+    msg += "_AlphaVision | Monitor your investments daily_"
+    return msg
+
+
+def format_buy_confirmation(ticker: str, price: float, qty: int) -> str:
+    """Telegram reply after /buy command."""
+    invested = price * qty
+    t = tax_and_breakeven(price, invested)
+    if not t:
+        return f"✅ *{ticker}* logged: {qty} shares @ ₹{price:.0f} (₹{invested:,.0f})"
+    stcg = t["stcg_at_target"]
+    ltcg = t["ltcg_at_target"]
+    return (
+        f"✅ *{ticker} added to portfolio*\n"
+        f"{qty} shares @ ₹{price:.0f} = ₹{invested:,.0f} invested\n\n"
+        f"Break-even: ₹{t['breakeven_price']:.1f}\n"
+        f"Stop-loss: ₹{t['stoploss_price']:.1f} (−₹{abs(t['stoploss_loss']):,.0f})\n\n"
+        f"To earn 15% net:\n"
+        f"• Sell before 1yr @ ₹{t['stcg_target_price']:.1f} "
+        f"(after ₹{stcg['tax']:,.0f} STCG tax)\n"
+        f"• Hold > 1yr, sell @ ₹{t['ltcg_target_price']:.1f} "
+        f"(after ₹{ltcg['tax']:,.0f} LTCG tax)\n"
+    )
+
 
 def run_daily_analysis():
     validate_env()
@@ -1736,8 +1947,13 @@ def run_daily_analysis():
     if alert_msg:
         send_telegram_message(alert_msg)
 
+    # Monitor active holdings and send alert if any red flags
+    portfolio_msg = monitor_holdings()
+    if portfolio_msg:
+        send_telegram_message(portfolio_msg)
+
 
 if __name__ == "__main__":
-    # GitHub Actions / one-shot mode: run once and exit
-    # Scheduling is handled by the GitHub Actions cron (9:15 AM IST weekdays)
+    # GitHub Actions cron runs this once daily at 9:15 AM IST and exits.
+    # Scheduling is handled entirely by .github/workflows/daily_analysis.yml
     run_daily_analysis()
