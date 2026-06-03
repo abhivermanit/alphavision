@@ -1005,42 +1005,44 @@ def build_invalidation_triggers(p1: Dict, p2: Dict, p3: Dict, screener: Dict) ->
 # ==================== CLAUDE THESIS GENERATOR ====================
 
 def generate_thesis_with_claude(analysis: Dict) -> str:
-    client = Anthropic()
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return "Thesis unavailable: ANTHROPIC_API_KEY not set"
+    client = Anthropic(api_key=api_key)
 
-    p1 = analysis["pillar1"]
-    p2 = analysis["pillar2"]
-    p3 = analysis["pillar3"]
+    p1 = analysis.get("pillar1", {})
+    p2 = analysis.get("pillar2", {})
+    p3 = analysis.get("pillar3", {})
+    p4 = analysis.get("pillar4", {})
+    p5 = analysis.get("pillar5", {})
 
-    prompt = f"""You are AlphaVision, a deep-value institutional analyst specialising in Indian equities (BSE/NSE).
-
-Stock: {analysis['stock_name']} ({analysis['ticker']})
-Sector: {p1.get('sector', analysis.get('sector', 'N/A'))}
-Composite Score: {analysis['composite_score']}/100
-Recommendation: {analysis['recommendation']}
-
-Pillar Scores:
-- Business Quality & Moat ({p1.get('score', 'N/A')}/30): Moat = {p1.get('moat_type', 'N/A')}, Avg ROCE = {p1.get('avg_roce', 'N/A')}%
-- Valuation & MoS ({p2.get('score', 'N/A')}/30): Best MoS = {p2.get('best_mos_pct', 'N/A')}%, EV/EBITDA = {p2.get('ev_ebitda', 'N/A')}x, FCF Yield = {p2.get('fcf_yield_pct', 'N/A')}%
-- Financial Health ({p3.get('score', 'N/A')}/20): D/E = {p3.get('de_ratio', 'N/A')}, Interest Coverage = {p3.get('interest_coverage', 'N/A')}x, Altman Z = {p3.get('altman_z', 'N/A')}
-- Management Quality ({analysis['pillar4'].get('score', 'N/A')}/10): Promoter Holding = {analysis['pillar4'].get('promoter_holding_pct', 'N/A')}%, Pledge = {analysis['pillar4'].get('pledge_pct', 'N/A')}%
-- Macro & Sentiment ({analysis['pillar5'].get('score', 'N/A')}/10): {analysis['pillar5'].get('sentiment_signal', 'N/A')}
-
-Write exactly 3 short paragraphs (2–3 sentences each):
-Para 1 — Why this business has a durable competitive advantage (reference moat type and ROCE).
-Para 2 — Why it is undervalued or fairly valued right now (reference a specific valuation metric with the number).
-Para 3 — The single biggest risk and what would invalidate this thesis.
-
-Institutional tone. No bullet points. No headers. No fluff."""
+    prompt = (
+        f"You are AlphaVision, a deep-value analyst for Indian equities.\n\n"
+        f"Stock: {analysis['stock_name']} ({analysis['ticker']})\n"
+        f"Sector: {analysis.get('sector', 'N/A')}\n"
+        f"Score: {analysis['composite_score']}/100  Rec: {analysis['recommendation']}\n\n"
+        f"P1 Business ({p1.get('score','N/A')}/30): Moat={p1.get('moat_type','N/A')}, ROCE={p1.get('avg_roce','N/A')}%\n"
+        f"P2 Valuation ({p2.get('score','N/A')}/30): MoS={p2.get('best_mos_pct','N/A')}%, EV/EBITDA={p2.get('ev_ebitda','N/A')}x\n"
+        f"P3 Health ({p3.get('score','N/A')}/20): D/E={p3.get('de_ratio','N/A')}, IntCov={p3.get('interest_coverage','N/A')}x\n"
+        f"P4 Mgmt ({p4.get('score','N/A')}/10): Promoter={p4.get('promoter_holding_pct','N/A')}%, Pledge={p4.get('pledge_pct','N/A')}%\n"
+        f"P5 Macro ({p5.get('score','N/A')}/10): {p5.get('sentiment_signal','Neutral')}\n\n"
+        f"Write 3 short paragraphs (2-3 sentences each):\n"
+        f"1. Why this business has a durable competitive advantage.\n"
+        f"2. Why it is undervalued now (cite a specific metric with number).\n"
+        f"3. The single biggest risk that would invalidate this thesis.\n"
+        f"Institutional tone. No bullets. No headers."
+    )
 
     try:
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            max_tokens=350,
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text
+        return message.content[0].text.strip()
     except Exception as e:
-        return f"Thesis unavailable: {str(e)[:80]}"
+        print(f"  [Claude thesis error] {type(e).__name__}: {e}")
+        return f"Thesis unavailable ({type(e).__name__})"
 
 
 def get_52w_context(price: float, high: float, low: float) -> Dict:
