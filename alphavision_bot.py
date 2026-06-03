@@ -1245,4 +1245,6 @@ def run_daily_analysis():
 
 
 if __name__ == "__main__":
+    # GitHub Actions / one-shot mode: run once and exit
+    # Scheduling is handled by the GitHub Actions cron (9:15 AM IST weekdays)
     run_daily_analysis()
