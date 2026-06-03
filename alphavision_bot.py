@@ -664,6 +664,21 @@ def score_valuation(yf_info: Dict, screener: Dict) -> Dict:
     valid_mos = [v for v in mos_vals if v is not None]
     details["best_mos_pct"] = round(max(valid_mos), 1) if valid_mos else None
 
+    # Safe entry price: lower of Graham Number and DCF-implied price, with 10% additional buffer
+    # This is the price at which a deep-value investor would confidently initiate a position
+    safe_prices = []
+    if details.get("graham_number") and details["graham_number"] > 0:
+        safe_prices.append(details["graham_number"] * 0.90)
+    if details.get("mos_dcf_pct") and market_cap > 0 and curr_price > 0:
+        # DCF intrinsic is in Cr (total market cap). Per-share price = intrinsic_cr * 1e7 / shares
+        # Approximate shares = market_cap / curr_price
+        shares_approx = market_cap / max(curr_price, 1)
+        if shares_approx > 0 and details.get("dcf_intrinsic_cr"):
+            dcf_per_share = (details["dcf_intrinsic_cr"] * 1e7) / shares_approx
+            safe_prices.append(dcf_per_share * 0.90)
+    details["safe_entry_price"] = round(min(safe_prices), 2) if safe_prices else None
+    details["current_price"]    = round(curr_price, 2)
+
     return details
 
 
@@ -1384,8 +1399,9 @@ def tax_and_breakeven(
     }
 
 
-def format_tax_summary(symbol: str, buy_price: float, investment: float) -> str:
-    """Format a compact tax/break-even summary for Telegram."""
+def format_tax_summary(symbol: str, buy_price: float, investment: float,
+                       safe_entry: float = None) -> str:
+    """Format entry levels, tax, and break-even summary for Telegram."""
     if not buy_price or not investment:
         return ""
     t = tax_and_breakeven(buy_price, investment)
@@ -1393,14 +1409,27 @@ def format_tax_summary(symbol: str, buy_price: float, investment: float) -> str:
         return ""
     stcg = t["stcg_at_target"]
     ltcg = t["ltcg_at_target"]
+
+    entry_line = ""
+    if safe_entry and safe_entry > 0:
+        if buy_price <= safe_entry:
+            entry_line = f"✅ *Safe entry: ₹{safe_entry:.0f}* — current price is at/below safe level\n"
+        else:
+            gap_pct = ((buy_price - safe_entry) / safe_entry) * 100
+            entry_line = (
+                f"⏳ *Safe entry: ₹{safe_entry:.0f}* "
+                f"({gap_pct:.0f}% above — wait for pullback)\n"
+            )
+
     return (
-        f"💰 *{symbol} — ₹{investment:,.0f} invested ({t['shares']} shares @ ₹{buy_price:.0f})*\n"
+        f"{entry_line}"
+        f"💰 *₹{investment:,.0f} at ₹{buy_price:.0f}* → {t['shares']} shares\n"
         f"Break-even: ₹{t['breakeven_price']:.1f} | Stop-loss: ₹{t['stoploss_price']:.1f} "
-        f"(loss ₹{abs(t['stoploss_loss']):,.0f})\n"
-        f"STCG target: ₹{t['stcg_target_price']:.1f} → net {stcg['net_return_pct']}% "
-        f"after ₹{stcg['tax']:,.0f} tax\n"
-        f"LTCG target: ₹{t['ltcg_target_price']:.1f} → net {ltcg['net_return_pct']}% "
-        f"after ₹{ltcg['tax']:,.0f} tax\n"
+        f"(−₹{abs(t['stoploss_loss']):,.0f})\n"
+        f"STCG exit (< 1yr): ₹{t['stcg_target_price']:.1f} → *net {stcg['net_return_pct']}%* "
+        f"after ₹{stcg['tax']:,.0f} tax (20%)\n"
+        f"LTCG exit (> 1yr): ₹{t['ltcg_target_price']:.1f} → *net {ltcg['net_return_pct']}%* "
+        f"after ₹{ltcg['tax']:,.0f} tax (12.5%)\n"
     )
 
 
@@ -1485,9 +1514,9 @@ def format_telegram_message(results: List[Dict], disqualified: List[Dict]) -> st
         rank_str = f" (#{rank}/{total} in sector)" if rank and total else ""
 
         # Tax summary (default ₹50,000 investment per stock)
-        price     = r.get("pillar2", {}).get("current_price") or \
-                    r.get("week52", {}).get("week52_high", 0) * 0.9  # fallback estimate
-        tax_str   = format_tax_summary(r["stock_name"], price, 50000) if price else ""
+        price       = p2.get("current_price") or r.get("week52", {}).get("week52_high", 0) * 0.9
+        safe_entry  = p2.get("safe_entry_price")
+        tax_str     = format_tax_summary(r["stock_name"], price, 50000, safe_entry) if price else ""
 
         msg += (
             f"*{r['stock_name']}* | {r['recommendation']} | {r['composite_score']}/100{mos_str}\n"
