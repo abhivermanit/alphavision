@@ -844,7 +844,10 @@ def get_news_sentiment(stock_name: str, symbol: str) -> Dict:
             return {"score": 50, "signal": "NEUTRAL", "headlines": []}
 
         # Use Claude to score sentiment from headlines
-        client = Anthropic()
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            return {"score": 50, "signal": "NEUTRAL", "headlines": headlines[:3]}
+        client = Anthropic(api_key=api_key)
         prompt = f"""You are a financial sentiment analyst for Indian equities.
 
 Stock: {stock_name} ({symbol}.NS)
@@ -870,6 +873,7 @@ Reply with ONLY a JSON object: {{"score": <number>, "reason": "<10 words max>"}}
         return {"score": score, "signal": result.get("reason", ""), "headlines": headlines[:3]}
 
     except Exception as e:
+        print(f"  [Claude sentiment error] {type(e).__name__}: {e}")
         return {"score": 50, "signal": "NEUTRAL", "headlines": []}
 
 
@@ -1040,6 +1044,7 @@ def generate_thesis_with_claude(analysis: Dict) -> str:
             messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text.strip()
+
     except Exception as e:
         print(f"  [Claude thesis error] {type(e).__name__}: {e}")
         return ""
