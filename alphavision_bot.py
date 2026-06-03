@@ -1060,6 +1060,7 @@ def get_52w_context(price: float, high: float, low: float) -> Dict:
 
 
 
+def _fetch_nse_quote(symbol: str) -> Dict:
     """
     Get current price and market cap from Screener.in data (already fetched).
     Falls back to deriving market cap from EPS × P/E if not directly available.
@@ -1068,15 +1069,14 @@ def get_52w_context(price: float, high: float, low: float) -> Dict:
     price    = screener.get("current_price") or 0
     mc_cr    = screener.get("market_cap_cr") or 0
 
-    # If market cap not scraped, derive from latest EPS and median P/E
     if mc_cr == 0 and price == 0:
         return {}
 
     return {
         "currentPrice": price,
         "marketCap_cr": mc_cr,
-        "52WeekHigh":   0,
-        "52WeekLow":    0,
+        "52WeekHigh":   screener.get("week52_high") or 0,
+        "52WeekLow":    screener.get("week52_low") or 0,
         "symbol":       symbol,
     }
 
