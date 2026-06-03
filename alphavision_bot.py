@@ -7,8 +7,9 @@ Methodology: alphavision_methodology.md
 import os
 import math
 import asyncio
-import sqlite3
 import time
+import json
+from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 import requests
@@ -19,21 +20,120 @@ from telegram.error import TelegramError
 import pandas as pd
 import numpy as np
 from anthropic import Anthropic
+from supabase import create_client, Client
 
 load_dotenv()
 
 # ==================== CONFIG ====================
-X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+X_BEARER_TOKEN   = os.getenv("X_BEARER_TOKEN")
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+SUPABASE_URL     = os.getenv("SUPABASE_URL")
+SUPABASE_KEY     = os.getenv("SUPABASE_KEY")
 
-NIFTY_50_STOCKS = [
-    "TCS", "RELIANCE", "INFY", "HDFCBANK", "ICICIBANK",
-    "SBIN", "BAJFINANCE", "LT", "MARUTI", "ASIANPAINT",
-    "SUNPHARMA", "WIPRO", "DRREDDY", "HCLTECH", "TECHM",
-    "TATASTEEL", "ADANIPORTS", "POWERGRID", "NTPC", "IOC",
+def get_supabase() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+NIFTY_500_STOCKS = [
+    # Nifty 50
+    "TCS", "RELIANCE", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BAJFINANCE",
+    "LT", "MARUTI", "ASIANPAINT", "SUNPHARMA", "WIPRO", "DRREDDY", "HCLTECH",
+    "TECHM", "TATASTEEL", "ADANIPORTS", "POWERGRID", "NTPC", "IOC",
+    "HINDUNILVR", "KOTAKBANK", "AXISBANK", "BAJAJFINSV", "BHARTIARTL",
+    "TITAN", "NESTLEIND", "ULTRACEMCO", "INDUSINDBK", "TATACONSUM",
+    "DIVISLAB", "CIPLA", "EICHERMOT", "HEROMOTOCO", "BAJAJ-AUTO",
+    "BRITANNIA", "COALINDIA", "ONGC", "BPCL", "HINDALCO",
+    "JSWSTEEL", "TATAMOTORS", "M&M", "GRASIM", "APOLLOHOSP",
+    "SBILIFE", "HDFCLIFE", "ADANIENT", "SHREECEM", "PIDILITIND",
+
+    # Nifty Next 50
+    "HAVELLS", "VOLTAS", "GODREJCP", "MARICO", "DABUR", "BERGEPAINT",
+    "COLPAL", "EMAMILTD", "MUTHOOTFIN", "CHOLAFIN", "BAJAJHLDNG",
+    "TORNTPHARM", "ALKEM", "AUROPHARMA", "BIOCON", "LUPIN",
+    "LICHSGFIN", "PFC", "RECLTD", "NHPC", "TATAPOWER", "TORNTPOWER",
+    "CESC", "JSPL", "SAIL", "ASHOKLEY", "TVSMOTOR", "MRF",
+    "MPHASIS", "LTIM", "PERSISTENT", "COFORGE", "OFSS",
+    "FEDERALBNK", "IDFCFIRSTB", "BANDHANBNK", "AUBANK",
+    "DMART", "TRENT", "PAGEIND", "SIEMENS", "ABB", "CUMMINSIND",
+    "THERMAX", "BEL", "HAL", "CONCOR", "SRF", "TATACHEM",
+    "DLF", "GODREJPROP", "OBEROIRLTY", "PRESTIGE",
+
+    # Nifty Midcap 150
+    "ASTRAL", "SUPREMEIND", "POLYCAB", "KANSAINER", "NILKAMAL",
+    "WHIRLPOOL", "SYMPHONY", "BLUESTARCO", "BATAINDIA", "RELAXO",
+    "VMART", "SHOPERSTOP", "ABFRL", "RAYMOND", "KPRMILL",
+    "GLENMARK", "IPCALAB", "NATCOPHARM", "GRANULES", "LALPATHLAB",
+    "METROPOLIS", "MAXHEALTH", "FORTIS", "APOLLOTYRE", "CEATLTD",
+    "EXIDEIND", "AMARARAJA", "BALKRISIND", "ESCORTS", "SUNDRMFAST",
+    "TATAELXSI", "KPITTECH", "ZENSAR", "RATEGAIN", "TANLA",
+    "RBLBANK", "MANAPPURAM", "AAVAS", "HOMEFIRST", "CREDITACC",
+    "CANFINHOME", "HUDCO", "IRFC", "IREDA", "SJVN",
+    "NATIONALUM", "HINDCOPPER", "MOIL", "GMRINFRA", "IRB",
+    "BHEL", "BEML", "COCHINSHIP", "RITES", "IRCON", "KNR", "NCC",
+    "NAVINFLUOR", "DEEPAKNTR", "GNFC", "ATUL", "FLUOROCHEM",
+    "PHOENIXLTD", "SOBHA", "BRIGADE", "KOLTEPATIL",
+    "ABBOTINDIA", "PFIZER", "GLAXO", "SANOFI",
+    "MOTHERSON", "BOSCHLTD", "SCHAEFFLER", "TIMKEN", "SKF",
+    "TATACOMM", "HFCL", "STLTECH",
+    "KALYANKJIL", "PNCINFRA", "AHLUCONT", "MAHLOG",
+    "SBICARD", "CHOLAFIN", "SPANDANA", "FUSION", "UGROCAP",
+    "UJJIVANSFB", "EQUITASBNK", "SURYODAY",
+    "HEXAWARE", "INTELLECT", "MASTEK", "ROUTE",
+    "VINATIORGA", "GALAXYSURF", "FINEORG", "ALKYLAMINE", "SUDARSCHEM",
+
+    # Nifty Smallcap 250 (top liquid names)
+    "ZOMATO", "NYKAA", "PAYTM", "POLICYBZR", "CARTRADE",
+    "EASEMYTRIP", "IRCTC", "RAILVIKAS", "RVNL", "NBCC",
+    "HUDCO", "SJVN", "NTPCGREEN", "ADANIGREEN", "ADANIPOWER",
+    "ADANITRANS", "ADANIWILMAR", "ADANIPORTS",
+    "PATANJALI", "EMUDHRA", "ZAGGLE", "HAPPYMIND",
+    "LATENTVIEW", "DATAMATICS", "CYIENT", "LTTS", "BIRLASOFT",
+    "NIITTECH", "MPHASIS", "SASKEN", "SONATSOFTW", "NEWGEN",
+    "NUCLEUS", "RAMCOCEM", "DALMIANAT", "HEIDELBERG", "BIRLACORPN",
+    "JKCEMENT", "ORIENTCEM", "SAGAR", "MANGALAM",
+    "PIIND", "BALAMINES", "TATACHEM", "GUJALKALI", "CAMLIN",
+    "CLEAN", "ROSSARI", "EPSILON", "ANURAS", "LXCHEM",
+    "IGPL", "TDPOWERSYS", "GPPL", "MAHSEAMLES", "RKFORGE",
+    "RATNAMANI", "WELCORP", "MSTCLTD", "MOIL", "HINDCOPPER",
+    "MIDHANI", "MTNL", "HCLTECH",
+    "JBCHEPHARM", "AJANTPHARM", "ERIS", "LINDHURST", "SOLARA",
+    "SEQUENT", "SUVEN", "DIVI", "NEULANDLAB", "DISHMAN",
+    "WOCKPHARMA", "STRIDES", "CAPLIPOINT", "SMSPHARMA",
+    "FINPIPE", "APTUS", "ARMANFIN", "MAS", "SPANDANA",
+    "UJJIVAN", "JANA", "ESAFSFB", "REPCO", "SATIN",
+    "PAISALO", "SBFC", "VLS", "MUTHOOTMF", "IIISL",
+    "NUVOCO", "PRISMJOHNS", "STARCEMENT", "KAKATCEM", "DECCAN",
+    "DELTACORP", "WONDERLA", "MAHINDCIE", "ENDURANCE", "SUPRAJIT",
+    "SUBROS", "GABRIEL", "JAYINDLTD", "UCALFUEL", "HIKAL",
+    "SWARAJENG", "VSTIND", "MAHSCOOTER", "KINETIC",
+    "TTKPRESTIG", "HAWKINS", "PRESTIGE", "SKFINDIA", "GRINDWELL",
+    "CARBORUNIV", "GRAPHITE", "HLEGLAS", "ASAHIINDIA",
+    "CENTURYPLY", "GREENPANEL", "KITEX", "GARFIBRES",
+    "SPORTKING", "INDORAMA", "FILATEX", "SPENTEX",
+    "BAJAJCON", "JYOTHYLAB", "ZYDUSWELL", "GODFRYPHLP", "VST",
+    "RADICO", "GLOBUSSPR", "ABDL", "GMMPFAUDLR",
+    "INDIAMART", "JUSTDIAL", "MATRIMONY", "NAUKRI", "INFOEDGE",
+    "MAKEMYTRIP", "YATRA", "CLEARTRIP",
+    "DELHIVERY", "BLUEDART", "GATI", "MAHINDLOG", "TCI",
+    "PGHH", "GILLETTE", "CASTROLIND", "SUPPETRO", "MOLD-TEK",
+    "AARTIIND", "VINDHYATEL", "HSCL", "SAREGAMA", "TIPSINDLTD",
+    "PVRINOX", "INOXWIND", "SUZLON", "RPOWER", "JSWENERGY",
+    "GREENKO", "ACME", "WAAREEENER", "PREMIER",
+    "GENESYS", "TANGERINE", "ARVINDFASN", "GOKALDAS",
+    "TIRUMALCHM", "AMARAJABAT", "COSMOFILMS", "POLYPLEX",
+    "UFLEX", "HUHTAMAKI", "MANJUSHREE", "MOLD-TEK",
+    "RESPONIND", "JAMNAAUTO", "SHRIRAMFIN", "CHOICEIN",
+    "MOTILALOFS", "IIFL", "ANGELONE", "5PAISA", "GEOJITFSL",
+    "ICICIPRULI", "STARHEALTH", "NIACL", "UIIC", "ORIENTINS",
+    "GICRE", "ICICIGI", "HDFCAMC", "NIPPONLIFE", "MIRAE",
+    "UTIAMC", "ABSLAMC",
 ]
+
+# Deduplicate while preserving order
+seen = set()
+NIFTY_500_STOCKS = [s for s in NIFTY_500_STOCKS if not (s in seen or seen.add(s))]
+NIFTY_50_STOCKS  = NIFTY_500_STOCKS  # alias used throughout the code
 
 # Sector mapping — replaces yfinance sector lookup
 STOCK_SECTOR_MAP = {
@@ -86,8 +186,10 @@ SECTOR_MACRO_BIAS = {
 def validate_env():
     missing = [k for k, v in {
         "TELEGRAM_BOT_TOKEN": TELEGRAM_TOKEN,
-        "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
-        "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
+        "TELEGRAM_CHAT_ID":   TELEGRAM_CHAT_ID,
+        "ANTHROPIC_API_KEY":  ANTHROPIC_API_KEY,
+        "SUPABASE_URL":       SUPABASE_URL,
+        "SUPABASE_KEY":       SUPABASE_KEY,
     }.items() if not v]
     if missing:
         raise EnvironmentError(f"Missing required env vars: {', '.join(missing)}")
@@ -242,6 +344,32 @@ def fetch_screener_data(ticker: str) -> Dict:
                             data["current_price"] = val
                         elif "market cap" in label:
                             data["market_cap_cr"] = val
+                        elif "52 week high" in label or "high" in label:
+                            data["week52_high"] = val
+                        elif "52 week low" in label or "low" in label:
+                            data["week52_low"] = val
+            except Exception:
+                pass
+
+            # Detect recent quarterly results (last 7 days)
+            try:
+                quarters = soup.select("#quarters table tr")
+                if quarters and len(quarters) > 1:
+                    # First header row contains quarter dates
+                    header_cells = quarters[0].find_all("th")
+                    if len(header_cells) > 1:
+                        latest_quarter = header_cells[1].get_text(strip=True)
+                        data["latest_quarter"] = latest_quarter
+                        # Check if it contains current month/year (recent result)
+                        now = datetime.now()
+                        current_markers = [
+                            str(now.year),
+                            f"{now.month:02d}",
+                            now.strftime("%b"),
+                        ]
+                        data["recent_earnings"] = any(
+                            m in latest_quarter for m in current_markers
+                        )
             except Exception:
                 pass
 
@@ -696,36 +824,53 @@ def score_management_quality(yf_info: Dict, screener: Dict) -> Dict:
 
 # ==================== PILLAR 5: MACRO & SENTIMENT (10%) ====================
 
-def get_x_sentiment(stock_name: str) -> float:
-    """Keyword-based X/Twitter sentiment. Returns 0–100."""
-    if not X_BEARER_TOKEN:
-        return 50
-    headers = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
-    params = {
-        "query": f"{stock_name} stock India",
-        "max_results": 100,
-        "tweet.fields": "public_metrics",
-    }
+def get_news_sentiment(stock_name: str, symbol: str) -> Dict:
+    """
+    Fetch Google News RSS headlines for the stock and use Claude to score sentiment.
+    Returns sentiment score 0-100 and top headlines.
+    """
     try:
-        resp = requests.get(
-            "https://api.twitter.com/2/tweets/search/recent",
-            headers=headers, params=params, timeout=5,
-        )
+        query = f"{stock_name} NSE stock India"
+        url = f"https://news.google.com/rss/search?q={requests.utils.quote(query)}&hl=en-IN&gl=IN&ceid=IN:en"
+        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code != 200:
-            return 50
-        tweets = resp.json().get("data", [])
-        if not tweets:
-            return 50
-        positive = ["buy", "bullish", "strong", "growth", "profit", "outperform", "breakout", "rally"]
-        negative = ["sell", "bearish", "weak", "decline", "loss", "underperform", "crash", "fraud"]
-        s = 50
-        for t in tweets:
-            text = t.get("text", "").lower()
-            s += sum(2 for w in positive if w in text)
-            s -= sum(2 for w in negative if w in text)
-        return min(100, max(0, s))
-    except Exception:
-        return 50
+            return {"score": 50, "signal": "NEUTRAL", "headlines": []}
+
+        soup = BeautifulSoup(resp.text, "xml")
+        items = soup.find_all("item")[:8]
+        headlines = [item.find("title").get_text(strip=True) for item in items if item.find("title")]
+
+        if not headlines:
+            return {"score": 50, "signal": "NEUTRAL", "headlines": []}
+
+        # Use Claude to score sentiment from headlines
+        client = Anthropic()
+        prompt = f"""You are a financial sentiment analyst for Indian equities.
+
+Stock: {stock_name} ({symbol}.NS)
+Recent news headlines:
+{chr(10).join(f"- {h}" for h in headlines)}
+
+Score the overall investment sentiment from these headlines on a scale of 0-100:
+- 0-20: Extreme negative (fraud, bankruptcy, regulatory action, major loss)
+- 20-40: Negative (earnings miss, headwinds, management concerns)
+- 40-60: Neutral (mixed news, routine updates)
+- 60-80: Positive (earnings beat, new contracts, expansion)
+- 80-100: Strongly positive (major win, sector tailwind, analyst upgrade)
+
+Reply with ONLY a JSON object: {{"score": <number>, "reason": "<10 words max>"}}"""
+
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=60,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = json.loads(msg.content[0].text.strip())
+        score = max(0, min(100, int(result.get("score", 50))))
+        return {"score": score, "signal": result.get("reason", ""), "headlines": headlines[:3]}
+
+    except Exception as e:
+        return {"score": 50, "signal": "NEUTRAL", "headlines": []}
 
 
 def score_macro_sentiment(ticker: str, stock_name: str, yf_info: Dict) -> Dict:
@@ -742,16 +887,18 @@ def score_macro_sentiment(ticker: str, stock_name: str, yf_info: Dict) -> Dict:
     beta = yf_info.get("beta") or 1.0
     details["beta"] = round(beta, 2)
     if beta > 1.5:
-        score -= 1  # high systematic risk
+        score -= 1
     elif beta < 0.7:
-        score += 1  # defensive character
+        score += 1
 
-    # X/Twitter sentiment with contrarian framework
-    sentiment_raw = get_x_sentiment(stock_name)
-    details["sentiment_raw"] = round(sentiment_raw, 1)
+    # Google News RSS + Claude sentiment
+    news = get_news_sentiment(stock_name, ticker)
+    sentiment_raw = news["score"]
+    details["sentiment_raw"]     = sentiment_raw
+    details["sentiment_reason"]  = news["signal"]
+    details["top_headlines"]     = news["headlines"]
 
     if sentiment_raw <= 20:
-        # Extreme fear → contrarian buy signal (if fundamentals are strong, handled in composite)
         sentiment_contribution = 7
         details["sentiment_signal"] = "EXTREME_FEAR_CONTRARIAN"
     elif sentiment_raw <= 40:
@@ -767,7 +914,7 @@ def score_macro_sentiment(ticker: str, stock_name: str, yf_info: Dict) -> Dict:
         sentiment_contribution = 2
         details["sentiment_signal"] = "EXTREME_GREED_AVOID"
 
-    score = score - 5 + sentiment_contribution  # replace neutral base with sentiment
+    score = score - 5 + sentiment_contribution
 
     score = min(10, max(0, score))
     details["score"] = score
@@ -887,7 +1034,7 @@ Institutional tone. No bullet points. No headers. No fluff."""
 
     try:
         message = client.messages.create(
-            model="claude-opus-4-5",
+            model="claude-haiku-4-5-20251001",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -896,7 +1043,23 @@ Institutional tone. No bullet points. No headers. No fluff."""
         return f"Thesis unavailable: {str(e)[:80]}"
 
 
-def _fetch_nse_quote(symbol: str) -> Dict:
+def get_52w_context(price: float, high: float, low: float) -> Dict:
+    """Returns how far price is from 52w high/low and position in range."""
+    if not price or not high or not low or high == low:
+        return {}
+    pct_from_high = round((price - high) / high * 100, 1)
+    pct_from_low  = round((price - low) / low * 100, 1)
+    position_pct  = round((price - low) / (high - low) * 100, 1)
+    return {
+        "week52_high":      round(high, 2),
+        "week52_low":       round(low, 2),
+        "pct_from_high":    pct_from_high,   # negative = below high
+        "pct_from_low":     pct_from_low,    # positive = above low
+        "range_position":   position_pct,    # 0% = at low, 100% = at high
+    }
+
+
+
     """
     Get current price and market cap from Screener.in data (already fetched).
     Falls back to deriving market cap from EPS × P/E if not directly available.
@@ -1079,6 +1242,13 @@ def analyse_stock(symbol: str) -> Optional[Dict]:
         "position_pct":    composite["position_pct"],
         "invalidation_triggers": invalidation,
         "screener_loaded": bool(screener),
+        "recent_earnings": screener.get("recent_earnings", False),
+        "latest_quarter":  screener.get("latest_quarter", ""),
+        "week52":          get_52w_context(
+            yf_info.get("currentPrice", 0),
+            screener.get("week52_high", 0),
+            screener.get("week52_low", 0),
+        ),
         "timestamp":       datetime.now().isoformat(),
     }
 
@@ -1087,12 +1257,157 @@ def analyse_stock(symbol: str) -> Optional[Dict]:
     return result
 
 
+# ==================== TAX CALCULATOR (FY 2025-26, Indian Resident) ====================
+
+# Indian equity transaction charges
+STT_BUY          = 0.001    # 0.1% on buy
+STT_SELL         = 0.001    # 0.1% on sell
+EXCHANGE_LEVY    = 0.0000325 # NSE exchange transaction charge
+GST_RATE         = 0.18     # 18% GST on brokerage + exchange levy
+STAMP_DUTY       = 0.00015  # 0.015% on buy only (max ₹1500, ignored for simplicity)
+SEBI_TURNOVER    = 0.000001 # ₹1 per ₹10L
+
+# Tax rates FY 2025-26
+STCG_RATE        = 0.20     # 20% on gains if held < 12 months
+LTCG_RATE        = 0.125    # 12.5% on gains if held > 12 months
+LTCG_EXEMPTION   = 125000   # ₹1.25 lakh per year exempt from LTCG
+
+
+def calculate_charges(value: float, is_buy: bool) -> float:
+    """Total transaction charges on a buy or sell of given value (in ₹)."""
+    stt         = value * (STT_BUY if is_buy else STT_SELL)
+    exchange    = value * EXCHANGE_LEVY
+    stamp       = value * STAMP_DUTY if is_buy else 0
+    sebi        = value * SEBI_TURNOVER
+    gst         = (exchange) * GST_RATE
+    return stt + exchange + stamp + sebi + gst
+
+
+def tax_and_breakeven(
+    buy_price: float,
+    investment_amount: float,
+    target_return_pct: float = 15.0,
+) -> Dict:
+    """
+    Calculate break-even, stop-loss, and exit targets with full tax impact.
+
+    Args:
+        buy_price:           Price per share at entry (₹)
+        investment_amount:   Total amount to invest (₹)
+        target_return_pct:   Desired net return % after all charges + tax
+
+    Returns dict with STCG and LTCG scenarios.
+    """
+    shares = int(investment_amount / buy_price)
+    if shares == 0:
+        return {}
+
+    actual_investment = shares * buy_price
+    buy_charges       = calculate_charges(actual_investment, is_buy=True)
+    total_cost        = actual_investment + buy_charges
+    cost_per_share    = total_cost / shares
+
+    def exit_analysis(sell_price: float, holding_months: int) -> Dict:
+        sell_value   = shares * sell_price
+        sell_charges = calculate_charges(sell_value, is_buy=False)
+        gross_profit = sell_value - actual_investment
+        net_proceeds = sell_value - sell_charges
+
+        if holding_months < 12:
+            tax = max(0, gross_profit) * STCG_RATE
+            tax_type = "STCG 20%"
+        else:
+            taxable_gain = max(0, gross_profit - LTCG_EXEMPTION)
+            tax = taxable_gain * LTCG_RATE
+            tax_type = "LTCG 12.5%"
+
+        net_profit    = net_proceeds - total_cost - tax
+        net_return_pct = (net_profit / total_cost) * 100
+
+        return {
+            "sell_price":      round(sell_price, 2),
+            "gross_profit":    round(gross_profit, 2),
+            "sell_charges":    round(sell_charges, 2),
+            "tax":             round(tax, 2),
+            "tax_type":        tax_type,
+            "net_profit":      round(net_profit, 2),
+            "net_return_pct":  round(net_return_pct, 1),
+        }
+
+    # Break-even price (covers all buy+sell charges, zero profit)
+    # Solve: shares*p - sell_charges(shares*p) - total_cost = 0
+    # Approximate: p = total_cost / (shares * (1 - STT_SELL - EXCHANGE_LEVY - SEBI_TURNOVER))
+    net_factor    = 1 - STT_SELL - EXCHANGE_LEVY - SEBI_TURNOVER
+    breakeven     = total_cost / (shares * net_factor)
+
+    # Stop-loss: -7% from buy price (standard swing stop), adjusted
+    stoploss_price = buy_price * 0.93
+    stoploss       = exit_analysis(stoploss_price, holding_months=1)
+
+    # STCG target: achieve desired return % net of STCG tax (held ~6 months)
+    # Solve iteratively
+    def find_target_price(months: int, target_pct: float) -> float:
+        lo, hi = buy_price, buy_price * 5
+        for _ in range(50):
+            mid = (lo + hi) / 2
+            ea  = exit_analysis(mid, months)
+            if ea["net_return_pct"] < target_pct:
+                lo = mid
+            else:
+                hi = mid
+        return round(mid, 2)
+
+    stcg_target_price = find_target_price(6, target_return_pct)
+    ltcg_target_price = find_target_price(13, target_return_pct)
+
+    return {
+        "shares":              shares,
+        "investment":          round(actual_investment, 2),
+        "buy_charges":         round(buy_charges, 2),
+        "total_cost":          round(total_cost, 2),
+        "cost_per_share":      round(cost_per_share, 2),
+        "breakeven_price":     round(breakeven, 2),
+        "stoploss_price":      round(stoploss_price, 2),
+        "stoploss_loss":       round(stoploss["net_profit"], 2),
+        "stcg_target_price":   stcg_target_price,
+        "stcg_at_target":      exit_analysis(stcg_target_price, 6),
+        "ltcg_target_price":   ltcg_target_price,
+        "ltcg_at_target":      exit_analysis(ltcg_target_price, 13),
+        "target_return_pct":   target_return_pct,
+    }
+
+
+def format_tax_summary(symbol: str, buy_price: float, investment: float) -> str:
+    """Format a compact tax/break-even summary for Telegram."""
+    if not buy_price or not investment:
+        return ""
+    t = tax_and_breakeven(buy_price, investment)
+    if not t:
+        return ""
+    stcg = t["stcg_at_target"]
+    ltcg = t["ltcg_at_target"]
+    return (
+        f"💰 *{symbol} — ₹{investment:,.0f} invested ({t['shares']} shares @ ₹{buy_price:.0f})*\n"
+        f"Break-even: ₹{t['breakeven_price']:.1f} | Stop-loss: ₹{t['stoploss_price']:.1f} "
+        f"(loss ₹{abs(t['stoploss_loss']):,.0f})\n"
+        f"STCG target: ₹{t['stcg_target_price']:.1f} → net {stcg['net_return_pct']}% "
+        f"after ₹{stcg['tax']:,.0f} tax\n"
+        f"LTCG target: ₹{t['ltcg_target_price']:.1f} → net {ltcg['net_return_pct']}% "
+        f"after ₹{ltcg['tax']:,.0f} tax\n"
+    )
+
+
 # ==================== TELEGRAM MESSAGING ====================
 
 async def _send(message: str):
     bot = Bot(token=TELEGRAM_TOKEN)
     async with bot:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown")
+        # Split into chunks of 4000 chars to stay under Telegram's 4096 limit
+        chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+        for chunk in chunks:
+            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=chunk, parse_mode="Markdown")
+            if len(chunks) > 1:
+                await asyncio.sleep(0.5)
 
 
 def send_telegram_message(message: str):
@@ -1105,101 +1420,234 @@ def send_telegram_message(message: str):
 
 def format_telegram_message(results: List[Dict], disqualified: List[Dict]) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    msg = f"*🎯 ALPHAVISION DEEP VALUE REPORT*\n_{now} IST_\n\n"
 
-    # Top BUY / STRONG BUY stocks
-    buys = [r for r in results if r["gate_passed"] and r["composite_score"] >= 65][:5]
-    if buys:
-        msg += "*── TOP PICKS ──*\n\n"
-        for r in buys:
-            p2 = r.get("pillar2", {})
-            mos = p2.get("best_mos_pct")
-            mos_str = f" | MoS {mos:.0f}%" if mos else ""
-            msg += (
-                f"*{r['stock_name']}* ({r['ticker']})\n"
-                f"{r['recommendation']} | Score: {r['composite_score']}/100{mos_str}\n"
-                f"Moat: {r['pillar1'].get('moat_type', 'N/A')} | "
-                f"ROCE: {r['pillar1'].get('avg_roce', 'N/A')}%\n"
-                f"Horizon: {r['horizon']} | Position: {r['position_pct']}\n"
-                f"_{r['thesis'][:180].strip()}..._\n\n"
-            )
+    # Only show top 7 by composite score, minimum score 65
+    top = sorted(
+        [r for r in results if r["gate_passed"] and r["composite_score"] >= 65],
+        key=lambda x: x["composite_score"],
+        reverse=True,
+    )[:7]
 
-    # Contrarian alerts (extreme fear + strong fundamentals)
+    total_analysed  = len(results) + len(disqualified)
+    total_passed    = len(results)
+    total_buys      = len([r for r in results if r["composite_score"] >= 65])
+
+    msg = (
+        f"*🎯 ALPHAVISION DEEP VALUE REPORT*\n"
+        f"_{now} IST_\n"
+        f"_{total_analysed} stocks scanned → {total_passed} passed gate → {total_buys} BUY/STRONG BUY_\n\n"
+    )
+
+    if not top:
+        msg += "_No strong buys today. Market may be fully valued — hold cash._\n"
+        return msg
+
+    msg += "*── TODAY'S STRONG PICKS ──*\n\n"
+
+    for r in top:
+        p1  = r.get("pillar1", {})
+        p2  = r.get("pillar2", {})
+        p5  = r.get("pillar5", {})
+        w52 = r.get("week52", {})
+
+        mos      = p2.get("best_mos_pct")
+        mos_str  = f" | MoS {mos:.0f}%" if mos else ""
+
+        # 52-week range bar
+        pos       = w52.get("range_position")
+        from_high = w52.get("pct_from_high")
+        if pos is not None and from_high is not None:
+            bar       = "█" * int(pos / 10) + "░" * (10 - int(pos / 10))
+            w52_str   = f"52w [{bar}] {from_high:+.1f}% from high\n"
+        else:
+            w52_str   = ""
+
+        # Earnings flag
+        earnings_str = f"⚡ *Results: {r.get('latest_quarter', '')}*\n" if r.get("recent_earnings") else ""
+
+        # Top headline
+        headlines = p5.get("top_headlines", [])
+        news_str  = f"📰 _{headlines[0][:90]}_\n" if headlines else ""
+
+        # Sector rank tag
+        sector_str = r.get("sector", "N/A")
+        if r.get("best_in_sector"):
+            sector_str += " 🏆"
+        rank = r.get("sector_rank")
+        total = r.get("sector_total")
+        rank_str = f" (#{rank}/{total} in sector)" if rank and total else ""
+
+        # Tax summary (default ₹50,000 investment per stock)
+        price     = r.get("pillar2", {}).get("current_price") or \
+                    r.get("week52", {}).get("week52_high", 0) * 0.9  # fallback estimate
+        tax_str   = format_tax_summary(r["stock_name"], price, 50000) if price else ""
+
+        msg += (
+            f"*{r['stock_name']}* | {r['recommendation']} | {r['composite_score']}/100{mos_str}\n"
+            f"{earnings_str}"
+            f"Moat: {p1.get('moat_type', 'N/A')} | ROCE: {p1.get('avg_roce', 'N/A')}% | "
+            f"{sector_str}{rank_str}\n"
+            f"{w52_str}"
+            f"{news_str}"
+            f"_{r['thesis'][:180].strip()}_\n"
+            f"{tax_str}\n"
+        )
+
+    # Contrarian alert (extreme fear + score ≥ 55 but didn't make top 7)
     contrarian = [
         r for r in results
         if r["gate_passed"]
-        and r["pillar5"].get("sentiment_signal") == "EXTREME_FEAR_CONTRARIAN"
+        and r.get("pillar5", {}).get("sentiment_signal") == "EXTREME_FEAR_CONTRARIAN"
         and r["composite_score"] >= 55
-    ]
+        and r not in top
+    ][:2]
     if contrarian:
-        msg += "*── ⚡ CONTRARIAN ALERT ──*\n"
+        msg += "*── ⚡ CONTRARIAN WATCH ──*\n"
         for r in contrarian:
-            msg += f"*{r['stock_name']}* — Extreme fear + score {r['composite_score']}/100\n"
+            msg += f"*{r['stock_name']}* — Extreme fear | Score {r['composite_score']}/100\n"
         msg += "\n"
 
-    # MONITOR stocks
-    monitors = [r for r in results if r["gate_passed"] and 50 <= r["composite_score"] < 65][:3]
-    if monitors:
-        msg += "*── MONITOR LIST ──*\n"
-        for r in monitors:
-            msg += f"*{r['stock_name']}* — {r['composite_score']}/100 | {r['recommendation']}\n"
-        msg += "\n"
-
-    # Disqualified
-    if disqualified:
-        msg += "*── ❌ DISQUALIFIED ──*\n"
-        for r in disqualified[:3]:
-            msg += f"{r['stock_name']}: _{r['fail_reasons'][0]}_\n"
-        msg += "\n"
-
-    msg += "_AlphaVision | Deep Value | 5–7yr Horizon_"
+    msg += f"_AlphaVision | Deep Value | 5–7yr Horizon | {total_analysed} stocks universe_"
     return msg
 
 
 # ==================== DATABASE ====================
 
-def init_db():
-    conn = sqlite3.connect("alphavision.db")
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS recommendations (
-        ticker TEXT, date TEXT, recommendation TEXT, composite_score REAL,
-        p1_moat_score REAL, p2_valuation_score REAL, p3_health_score REAL,
-        p4_management_score REAL, p5_macro_score REAL,
-        margin_of_safety_pct REAL, moat_type TEXT,
-        gate_passed INTEGER, fail_reasons TEXT,
-        risk_profile TEXT, horizon TEXT, position_pct TEXT,
-        thesis TEXT, invalidation_triggers TEXT,
-        screener_loaded INTEGER
-    )""")
-    conn.commit()
-    return conn
+# ==================== DATABASE (SUPABASE) ====================
+
+def save_recommendation(result: Dict):
+    """Upsert a recommendation record to Supabase."""
+    try:
+        db = get_supabase()
+        db.table("recommendations").upsert({
+            "ticker":             result["ticker"],
+            "date":               result["timestamp"],
+            "recommendation":     result["recommendation"],
+            "composite_score":    result.get("composite_score", 0),
+            "p1_moat_score":      result.get("pillar1", {}).get("score"),
+            "p2_valuation_score": result.get("pillar2", {}).get("score"),
+            "p3_health_score":    result.get("pillar3", {}).get("score"),
+            "p4_management_score":result.get("pillar4", {}).get("score"),
+            "p5_macro_score":     result.get("pillar5", {}).get("score"),
+            "margin_of_safety_pct": result.get("pillar2", {}).get("best_mos_pct"),
+            "moat_type":          result.get("pillar1", {}).get("moat_type"),
+            "gate_passed":        result.get("gate_passed", False),
+            "fail_reasons":       "; ".join(result.get("fail_reasons", [])),
+            "risk_profile":       result.get("risk_profile"),
+            "horizon":            result.get("horizon"),
+            "position_pct":       result.get("position_pct"),
+            "thesis":             result.get("thesis"),
+            "invalidation_triggers": "; ".join(result.get("invalidation_triggers", [])),
+            "screener_loaded":    result.get("screener_loaded", False),
+            "sector":             result.get("sector", ""),
+            "best_in_sector":     result.get("best_in_sector", False),
+            "sector_rank":        result.get("sector_rank"),
+            "sector_total":       result.get("sector_total"),
+        }, on_conflict="ticker,date").execute()
+    except Exception as e:
+        print(f"[DB] save error for {result.get('ticker')}: {e}")
 
 
-def save_to_db(conn: sqlite3.Connection, result: Dict):
-    c = conn.cursor()
-    c.execute("""INSERT INTO recommendations VALUES
-        (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-        result["ticker"],
-        result["timestamp"],
-        result["recommendation"],
-        result.get("composite_score", 0),
-        result.get("pillar1", {}).get("score"),
-        result.get("pillar2", {}).get("score"),
-        result.get("pillar3", {}).get("score"),
-        result.get("pillar4", {}).get("score"),
-        result.get("pillar5", {}).get("score"),
-        result.get("pillar2", {}).get("best_mos_pct"),
-        result.get("pillar1", {}).get("moat_type"),
-        int(result.get("gate_passed", False)),
-        "; ".join(result.get("fail_reasons", [])),
-        result.get("risk_profile"),
-        result.get("horizon"),
-        result.get("position_pct"),
-        result.get("thesis"),
-        "; ".join(result.get("invalidation_triggers", [])),
-        int(result.get("screener_loaded", False)),
-    ))
-    conn.commit()
+# ==================== WATCHLIST (SUPABASE) ====================
+
+def update_watchlist(results: List[Dict]) -> List[Dict]:
+    """
+    Add MONITOR stocks (50-64) to watchlist.
+    Alert if any watchlist stock crossed into BUY (≥65) today.
+    Returns list of crossover alert dicts.
+    """
+    try:
+        db        = get_supabase()
+        alerts    = []
+        score_map = {r["ticker"]: r for r in results if r.get("gate_passed")}
+
+        # Fetch existing watchlist
+        rows = db.table("watchlist").select("ticker,score_when_added,alerted").execute().data or []
+        existing_tickers = {row["ticker"] for row in rows}
+
+        for row in rows:
+            ticker  = row["ticker"]
+            alerted = row["alerted"]
+            result  = score_map.get(ticker)
+            if not result:
+                continue
+            score = result["composite_score"]
+            if score >= 65 and not alerted:
+                alerts.append(result)
+                db.table("watchlist").update({"score_today": score, "alerted": True}).eq("ticker", ticker).execute()
+            else:
+                db.table("watchlist").update({"score_today": score}).eq("ticker", ticker).execute()
+
+        # Add new MONITOR stocks
+        for r in results:
+            if r.get("gate_passed") and 50 <= r["composite_score"] < 65 and r["ticker"] not in existing_tickers:
+                db.table("watchlist").upsert({
+                    "ticker":           r["ticker"],
+                    "sector":           r.get("sector", ""),
+                    "date_added":       datetime.now().date().isoformat(),
+                    "score_when_added": r["composite_score"],
+                    "score_today":      r["composite_score"],
+                    "alerted":          False,
+                }, on_conflict="ticker").execute()
+
+        # Remove stocks that dropped below 45 and were never alerted
+        db.table("watchlist").delete().lt("score_today", 45).eq("alerted", False).execute()
+
+        return alerts
+    except Exception as e:
+        print(f"[Watchlist] error: {e}")
+        return []
+
+
+def format_watchlist_alert(alerts: List[Dict]) -> Optional[str]:
+    if not alerts:
+        return None
+    msg = "*🚨 WATCHLIST CROSSOVER ALERT*\n\n"
+    msg += "_These stocks moved from MONITOR → BUY territory today:_\n\n"
+    for r in alerts:
+        p1  = r.get("pillar1", {})
+        p2  = r.get("pillar2", {})
+        mos = p2.get("best_mos_pct")
+        msg += (
+            f"*{r['stock_name']}* — {r['recommendation']} | {r['composite_score']}/100\n"
+            f"Moat: {p1.get('moat_type', 'N/A')} | ROCE: {p1.get('avg_roce', 'N/A')}%"
+            + (f" | MoS {mos:.0f}%" if mos else "") + "\n"
+            f"_{r['thesis'][:150].strip()}_\n\n"
+        )
+    msg += "_Consider buying on Groww. Review thesis before acting._"
+    return msg
+
+
+# ==================== PEER COMPARISON ====================
+
+def tag_best_in_sector(results: List[Dict]) -> List[Dict]:
+    """
+    For each sector, find the highest scoring stock and tag it as best in sector.
+    Also computes each stock's percentile rank within its sector.
+    """
+    from collections import defaultdict
+    sector_groups: Dict[str, List[Dict]] = defaultdict(list)
+
+    for r in results:
+        if r.get("gate_passed") and r.get("sector"):
+            sector_groups[r["sector"]].append(r)
+
+    for sector, stocks in sector_groups.items():
+        if len(stocks) < 2:
+            continue
+        stocks_sorted = sorted(stocks, key=lambda x: x["composite_score"], reverse=True)
+        # Tag the top stock in each sector
+        stocks_sorted[0]["best_in_sector"] = True
+        # Add sector rank to all
+        for i, s in enumerate(stocks_sorted):
+            s["sector_rank"]  = i + 1
+            s["sector_total"] = len(stocks_sorted)
+
+    return results
+
+
+def save_to_db(conn, result: Dict):
+    save_recommendation(result)
 
 
 # ==================== MAIN EXECUTION ====================
@@ -1233,15 +1681,24 @@ def run_daily_analysis():
 
     print(f"\n✓ Analysis complete: {len(results)} scored, {len(disqualified)} disqualified")
 
-    # Send Telegram
+    # Peer comparison — tag best in sector
+    results = tag_best_in_sector(results)
+
+    # Watchlist: check crossovers, add new MONITOR stocks
+    watchlist_alerts = update_watchlist(results)
+
+    # Save all results to Supabase
+    for r in results + disqualified:
+        save_recommendation(r)
+
+    # Send main daily report
     message = format_telegram_message(results, disqualified)
     send_telegram_message(message)
 
-    # Save to DB
-    conn = init_db()
-    for r in results + disqualified:
-        save_to_db(conn, r)
-    conn.close()
+    # Send watchlist crossover alerts separately
+    alert_msg = format_watchlist_alert(watchlist_alerts)
+    if alert_msg:
+        send_telegram_message(alert_msg)
 
 
 if __name__ == "__main__":
