@@ -1042,7 +1042,7 @@ def generate_thesis_with_claude(analysis: Dict) -> str:
         return message.content[0].text.strip()
     except Exception as e:
         print(f"  [Claude thesis error] {type(e).__name__}: {e}")
-        return f"Thesis unavailable ({type(e).__name__})"
+        return ""
 
 
 def get_52w_context(price: float, high: float, low: float) -> Dict:
@@ -1491,8 +1491,8 @@ def format_telegram_message(results: List[Dict], disqualified: List[Dict]) -> st
             f"{sector_str}{rank_str}\n"
             f"{w52_str}"
             f"{news_str}"
-            f"_{r['thesis'][:180].strip()}_\n"
-            f"{tax_str}\n"
+            + (f"_{r['thesis'][:180].strip()}_\n" if r.get('thesis') else "")
+            + f"{tax_str}\n"
         )
 
     # Contrarian alert (extreme fear + score ≥ 55 but didn't make top 7)
@@ -1614,7 +1614,7 @@ def format_watchlist_alert(alerts: List[Dict]) -> Optional[str]:
             f"*{r['stock_name']}* — {r['recommendation']} | {r['composite_score']}/100\n"
             f"Moat: {p1.get('moat_type', 'N/A')} | ROCE: {p1.get('avg_roce', 'N/A')}%"
             + (f" | MoS {mos:.0f}%" if mos else "") + "\n"
-            f"_{r['thesis'][:150].strip()}_\n\n"
+            + (f"_{r['thesis'][:150].strip()}_\n\n" if r.get('thesis') else "\n")
         )
     msg += "_Consider buying on Groww. Review thesis before acting._"
     return msg
