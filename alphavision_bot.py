@@ -1772,7 +1772,7 @@ def monitor_holdings() -> Optional[str]:
             continue
 
         if result is None:
-            print("no data")
+            print(f"no data — skipping (check ticker '{ticker}' exists on screener.in)")
             continue
 
         score      = result.get("composite_score", 0)
@@ -1834,7 +1834,10 @@ def monitor_holdings() -> Optional[str]:
             print(f"✓ {score}/100 | P&L {pnl_pct:+.1f}%")
 
     if not alerts and not all_ok:
+        print("[Portfolio] All holdings returned no data — check ticker names in Supabase match screener symbols")
         return None
+
+    print(f"[Portfolio] alerts={len(alerts)} ok={len(alerts + all_ok)} — building message")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg = f"*📊 ALPHAVISION PORTFOLIO MONITOR*\n_{now} IST_\n\n"
