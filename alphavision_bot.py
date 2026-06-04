@@ -861,7 +861,11 @@ def get_news_sentiment(stock_name: str, symbol: str) -> Dict:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             return {"score": 50, "signal": "NEUTRAL", "headlines": headlines[:3]}
-        from openai import OpenAI
+        try:
+            from openai import OpenAI
+        except ImportError:
+            print(f"  [Sentiment] openai package not installed")
+            return {"score": 50, "signal": "NEUTRAL", "headlines": headlines[:3]}
         client = OpenAI(api_key=api_key)
         prompt = f"""You are a financial sentiment analyst for Indian equities.
 
@@ -1027,8 +1031,13 @@ def build_invalidation_triggers(p1: Dict, p2: Dict, p3: Dict, screener: Dict) ->
 def generate_thesis_with_claude(analysis: Dict) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
+        print(f"  [Thesis] OPENAI_API_KEY not set — skipping")
         return ""
-    from openai import OpenAI
+    try:
+        from openai import OpenAI
+    except ImportError:
+        print(f"  [Thesis] openai package not installed — skipping")
+        return ""
     client = OpenAI(api_key=api_key)
 
     p1 = analysis.get("pillar1", {})
@@ -1846,7 +1855,6 @@ def monitor_holdings() -> Optional[str]:
     if not alerts and not all_ok:
         return None
 
-    # Format the full holdings report
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg = f"*📊 ALPHAVISION PORTFOLIO MONITOR*\n_{now} IST_\n\n"
 
@@ -1951,10 +1959,12 @@ def run_daily_analysis():
     if alert_msg:
         send_telegram_message(alert_msg)
 
-    # Monitor active holdings and send alert if any red flags
+    # Monitor active holdings — always send daily P&L summary
     portfolio_msg = monitor_holdings()
     if portfolio_msg:
         send_telegram_message(portfolio_msg)
+    else:
+        print("  No active holdings found in Supabase")
 
 
 if __name__ == "__main__":
