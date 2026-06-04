@@ -1490,7 +1490,8 @@ def format_telegram_message(results: List[Dict], disqualified: List[Dict]) -> st
         w52 = r.get("week52", {})
 
         mos      = p2.get("best_mos_pct")
-        mos_str  = f" | MoS {mos:.0f}%" if mos else ""
+        # Only show MoS when meaningful (between -50% and +100%)
+        mos_str  = f" | MoS {mos:.0f}%" if (mos is not None and -50 <= mos <= 100) else ""
 
         # 52-week range bar
         pos       = w52.get("range_position")
