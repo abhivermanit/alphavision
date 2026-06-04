@@ -1147,8 +1147,9 @@ def build_info_from_screener(symbol: str, screener: Dict, nse_quote: Dict) -> Di
         debt_latest / max(equity_latest, 1) if equity_latest else 0
     )
 
-    # Book value per share (approx)
-    book_value = equity_latest  # in Cr; per share needs share count
+    # Book value per share — equity in Cr / shares (shares = market_cap_cr / price)
+    shares_outstanding = (market_cap_cr / price) if price > 0 else 0
+    book_value = (equity_latest / shares_outstanding) if shares_outstanding > 0 else 0
 
     # Profit margin
     profit_margin = (pat_latest / max(rev_latest, 1)) * 100 if rev_latest else 0
