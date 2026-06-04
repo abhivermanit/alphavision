@@ -27,7 +27,7 @@ load_dotenv()
 X_BEARER_TOKEN   = os.getenv("X_BEARER_TOKEN")
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL     = os.getenv("SUPABASE_URL")
 SUPABASE_KEY     = os.getenv("SUPABASE_KEY")
 
@@ -186,7 +186,7 @@ def validate_env():
     missing = [k for k, v in {
         "TELEGRAM_BOT_TOKEN": TELEGRAM_TOKEN,
         "TELEGRAM_CHAT_ID":   TELEGRAM_CHAT_ID,
-        "ANTHROPIC_API_KEY":  ANTHROPIC_API_KEY,
+        "OPENAI_API_KEY":     OPENAI_API_KEY,
         "SUPABASE_URL":       SUPABASE_URL,
         "SUPABASE_KEY":       SUPABASE_KEY,
     }.items() if not v]
