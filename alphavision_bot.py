@@ -19,7 +19,6 @@ from telegram import Bot
 from telegram.error import TelegramError
 import pandas as pd
 import numpy as np
-from anthropic import Anthropic
 from supabase import create_client, Client
 
 load_dotenv()
@@ -851,18 +850,19 @@ def get_news_sentiment(stock_name: str, symbol: str) -> Dict:
         if resp.status_code != 200:
             return {"score": 50, "signal": "NEUTRAL", "headlines": []}
 
-        soup = BeautifulSoup(resp.text, "xml")
+        soup = BeautifulSoup(resp.text, "lxml-xml")
         items = soup.find_all("item")[:8]
         headlines = [item.find("title").get_text(strip=True) for item in items if item.find("title")]
 
         if not headlines:
             return {"score": 50, "signal": "NEUTRAL", "headlines": []}
 
-        # Use Claude to score sentiment from headlines
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        # Use OpenAI to score sentiment from headlines
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             return {"score": 50, "signal": "NEUTRAL", "headlines": headlines[:3]}
-        client = Anthropic(api_key=api_key)
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
         prompt = f"""You are a financial sentiment analyst for Indian equities.
 
 Stock: {stock_name} ({symbol}.NS)
@@ -878,17 +878,18 @@ Score the overall investment sentiment from these headlines on a scale of 0-100:
 
 Reply with ONLY a JSON object: {{"score": <number>, "reason": "<10 words max>"}}"""
 
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
             max_tokens=60,
             messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
         )
-        result = json.loads(msg.content[0].text.strip())
+        result = json.loads(resp.choices[0].message.content.strip())
         score = max(0, min(100, int(result.get("score", 50))))
         return {"score": score, "signal": result.get("reason", ""), "headlines": headlines[:3]}
 
     except Exception as e:
-        print(f"  [Claude sentiment error] {type(e).__name__}: {e}")
+        print(f"  [OpenAI sentiment error] {type(e).__name__}: {e}")
         return {"score": 50, "signal": "NEUTRAL", "headlines": []}
 
 
@@ -1021,13 +1022,14 @@ def build_invalidation_triggers(p1: Dict, p2: Dict, p3: Dict, screener: Dict) ->
     return triggers[:5]
 
 
-# ==================== CLAUDE THESIS GENERATOR ====================
+# ==================== THESIS GENERATOR (OpenAI) ====================
 
 def generate_thesis_with_claude(analysis: Dict) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        return "Thesis unavailable: ANTHROPIC_API_KEY not set"
-    client = Anthropic(api_key=api_key)
+        return ""
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
 
     p1 = analysis.get("pillar1", {})
     p2 = analysis.get("pillar2", {})
@@ -1053,15 +1055,15 @@ def generate_thesis_with_claude(analysis: Dict) -> str:
     )
 
     try:
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
             max_tokens=350,
             messages=[{"role": "user", "content": prompt}],
         )
-        return message.content[0].text.strip()
+        return resp.choices[0].message.content.strip()
 
     except Exception as e:
-        print(f"  [Claude thesis error] {type(e).__name__}: {e}")
+        print(f"  [OpenAI thesis error] {type(e).__name__}: {e}")
         return ""
 
 
