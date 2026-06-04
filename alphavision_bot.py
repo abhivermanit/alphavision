@@ -915,12 +915,11 @@ def score_macro_sentiment(ticker: str, stock_name: str, yf_info: Dict) -> Dict:
     elif beta < 0.7:
         score += 1
 
-    # Google News RSS + Claude sentiment
-    news = get_news_sentiment(stock_name, ticker)
-    sentiment_raw = news["score"]
-    details["sentiment_raw"]     = sentiment_raw
-    details["sentiment_reason"]  = news["signal"]
-    details["top_headlines"]     = news["headlines"]
+    # Sentiment: skip OpenAI call — use neutral baseline (re-enable when credits added)
+    sentiment_raw = 50
+    details["sentiment_raw"]    = sentiment_raw
+    details["sentiment_reason"] = "NEUTRAL"
+    details["top_headlines"]    = []
 
     if sentiment_raw <= 20:
         sentiment_contribution = 7
@@ -1286,8 +1285,8 @@ def analyse_stock(symbol: str) -> Optional[Dict]:
         "timestamp":       datetime.now().isoformat(),
     }
 
-    # Generate Claude thesis
-    result["thesis"] = generate_thesis_with_claude(result)
+    # Thesis generation: skip OpenAI call — re-enable when credits added
+    result["thesis"] = ""
     return result
 
 
@@ -1733,121 +1732,103 @@ def add_holding(ticker: str, buy_price: float, quantity: int, notes: str = "") -
 
 def monitor_holdings() -> Optional[str]:
     """
-    Run full analysis on all active holdings.
-    Generate an alert if any holding shows a red flag:
-      - Composite score dropped ≥15 pts vs score_at_buy
-      - Pillar 3 health score < 8/20
-      - Sentiment flipped to EXTREME_GREED (overvalued, consider selling)
-      - MoS turned deeply negative (price > 120% of intrinsic)
-      - P&L summary with current STCG/LTCG tax impact
-    Returns a formatted Telegram message, or None if all clear.
+    Run full analysis on all active holdings and send daily P&L summary.
+    Always returns a message if holdings exist.
     """
-    holdings = get_holdings()
+    try:
+        holdings = get_holdings()
+    except Exception as e:
+        print(f"[Portfolio] get_holdings error: {e}")
+        return None
+
     if not holdings:
+        print("[Portfolio] No active holdings found")
         return None
 
     print(f"\n📊 Monitoring {len(holdings)} holdings...")
 
-    alerts   = []
-    all_ok   = []
+    alerts  = []
+    all_ok  = []
 
     for h in holdings:
-        ticker     = h["ticker"]
-        buy_price  = h["buy_price"]
-        quantity   = h["quantity"]
-        buy_date   = h.get("buy_date", "")
-        score_ref  = h.get("score_at_buy") or 65  # default if not stored
+        ticker    = h["ticker"]
+        buy_price = h["buy_price"]
+        quantity  = h["quantity"]
+        buy_date  = h.get("buy_date", "")
+        score_ref = h.get("score_at_buy") or 65
 
         print(f"  [{ticker}]", end=" ", flush=True)
         try:
             result = analyse_stock(ticker)
         except Exception as e:
             print(f"error: {e}")
+            all_ok.append({
+                "ticker": ticker, "stock_name": ticker, "buy_price": buy_price,
+                "curr_price": buy_price, "quantity": quantity, "pnl_total": 0,
+                "pnl_pct": 0.0, "net_pnl": 0, "tax_on_pnl": 0, "tax_type": "—",
+                "held_days": 0, "score": score_ref, "score_ref": score_ref,
+                "mos": None, "red_flags": [f"Analysis error: {str(e)[:50]}"],
+            })
             continue
 
         if result is None:
             print("no data")
             continue
 
-        score       = result.get("composite_score", 0)
-        p2          = result.get("pillar2", {})
-        p3          = result.get("pillar3", {})
-        p5          = result.get("pillar5", {})
-        curr_price  = p2.get("current_price") or buy_price
-        sentiment   = p5.get("sentiment_signal", "NEUTRAL")
-        mos         = p2.get("best_mos_pct")
+        score      = result.get("composite_score", 0)
+        p2         = result.get("pillar2", {})
+        p3         = result.get("pillar3", {})
+        p5         = result.get("pillar5", {})
+        curr_price = p2.get("current_price") or buy_price
+        sentiment  = p5.get("sentiment_signal", "NEUTRAL")
+        mos        = p2.get("best_mos_pct")
 
-        # P&L
         pnl_per_share = curr_price - buy_price
         pnl_total     = round(pnl_per_share * quantity, 2)
-        pnl_pct       = round((pnl_per_share / buy_price) * 100, 1) if buy_price else 0
+        pnl_pct       = round((pnl_per_share / buy_price) * 100, 1) if buy_price else 0.0
 
-        # Holding period (days)
         try:
-            from datetime import date
-            held_days = (date.today() - date.fromisoformat(buy_date)).days if buy_date else 0
+            from datetime import date as _date
+            held_days = (_date.today() - _date.fromisoformat(buy_date)).days if buy_date else 0
         except Exception:
             held_days = 0
         held_months = held_days / 30
 
-        # Tax on current P&L
-        invested = buy_price * quantity
-        tax_info = tax_and_breakeven(buy_price, invested)
-        if tax_info:
-            ea = tax_info  # reuse exit_analysis logic below
-        gross_gain  = pnl_total
+        gross_gain = pnl_total
         if gross_gain > 0:
             if held_months < 12:
-                tax_on_pnl  = gross_gain * STCG_RATE
-                tax_type    = "STCG 20%"
+                tax_on_pnl = round(gross_gain * STCG_RATE, 2)
+                tax_type   = "STCG 20%"
             else:
-                taxable     = max(0, gross_gain - LTCG_EXEMPTION)
-                tax_on_pnl  = taxable * LTCG_RATE
-                tax_type    = "LTCG 12.5%"
-            net_pnl     = round(gross_gain - tax_on_pnl, 2)
+                tax_on_pnl = round(max(0, gross_gain - LTCG_EXEMPTION) * LTCG_RATE, 2)
+                tax_type   = "LTCG 12.5%"
+            net_pnl = round(gross_gain - tax_on_pnl, 2)
         else:
-            tax_on_pnl  = 0
-            tax_type    = "—"
-            net_pnl     = round(gross_gain, 2)
+            tax_on_pnl, tax_type, net_pnl = 0, "—", round(gross_gain, 2)
 
-        # Detect red flags
         red_flags = []
-        score_drop = score_ref - score
-        if score_drop >= 15:
-            red_flags.append(f"Score fell {score_drop} pts ({score_ref} → {score})")
+        if score_ref - score >= 15:
+            red_flags.append(f"Score fell {score_ref - score} pts ({score_ref} → {score})")
         if (p3.get("score") or 20) < 8:
-            red_flags.append(f"Financial health weak ({p3.get('score', '?')}/20)")
+            red_flags.append(f"Financial health weak ({p3.get('score','?')}/20)")
         if sentiment == "EXTREME_GREED_AVOID":
-            red_flags.append("Sentiment: extreme greed — market may be overvaluing")
-        if mos is not None and mos < -20:
-            red_flags.append(f"Stock now {abs(mos):.0f}% ABOVE intrinsic value — overvalued")
+            red_flags.append("Extreme greed sentiment — consider trimming")
+        if mos is not None and -50 <= mos < -20:
+            red_flags.append(f"Stock {abs(mos):.0f}% above intrinsic value")
         if pnl_pct <= -10:
-            red_flags.append(f"Down {abs(pnl_pct):.1f}% — approaching stop-loss territory")
+            red_flags.append(f"Down {abs(pnl_pct):.1f}% — near stop-loss")
 
         entry = {
-            "ticker":       ticker,
-            "stock_name":   result.get("stock_name", ticker),
-            "buy_price":    buy_price,
-            "curr_price":   curr_price,
-            "quantity":     quantity,
-            "pnl_total":    pnl_total,
-            "pnl_pct":      pnl_pct,
-            "net_pnl":      net_pnl,
-            "tax_on_pnl":   round(tax_on_pnl, 2),
-            "tax_type":     tax_type,
-            "held_days":    held_days,
-            "score":        score,
-            "score_ref":    score_ref,
-            "mos":          mos,
-            "sentiment":    sentiment,
-            "red_flags":    red_flags,
-            "recommendation": result.get("recommendation", ""),
-            "p1":           result.get("pillar1", {}),
+            "ticker": ticker, "stock_name": result.get("stock_name", ticker),
+            "buy_price": buy_price, "curr_price": curr_price, "quantity": quantity,
+            "pnl_total": pnl_total, "pnl_pct": pnl_pct, "net_pnl": net_pnl,
+            "tax_on_pnl": tax_on_pnl, "tax_type": tax_type, "held_days": held_days,
+            "score": score, "score_ref": score_ref, "mos": mos, "red_flags": red_flags,
         }
 
         if red_flags:
             alerts.append(entry)
-            print(f"⚠ {len(red_flags)} flag(s): {', '.join(red_flags[:1])}")
+            print(f"⚠ {red_flags[0]}")
         else:
             all_ok.append(entry)
             print(f"✓ {score}/100 | P&L {pnl_pct:+.1f}%")
@@ -1861,13 +1842,11 @@ def monitor_holdings() -> Optional[str]:
     if alerts:
         msg += "*⚠ ACTION REQUIRED ──*\n\n"
         for e in alerts:
-            pnl_sign = "+" if e["pnl_pct"] >= 0 else ""
+            sign = "+" if e["pnl_pct"] >= 0 else ""
             msg += (
                 f"*{e['stock_name']}* | {e['score']}/100 | "
-                f"P&L: *{pnl_sign}{e['pnl_pct']:.1f}%* "
-                f"(₹{e['pnl_total']:+,.0f})\n"
-                f"Bought @ ₹{e['buy_price']:.0f} → Now ₹{e['curr_price']:.0f} "
-                f"| Held {e['held_days']}d\n"
+                f"*{sign}{e['pnl_pct']:.1f}%* (₹{e['pnl_total']:+,.0f})\n"
+                f"Bought ₹{e['buy_price']:.0f} → ₹{e['curr_price']:.0f} | {e['held_days']}d held\n"
                 f"Net after {e['tax_type']}: ₹{e['net_pnl']:+,.0f}\n"
             )
             for flag in e["red_flags"]:
@@ -1877,13 +1856,12 @@ def monitor_holdings() -> Optional[str]:
     if all_ok:
         msg += "*✅ HOLDINGS OK ──*\n\n"
         for e in all_ok:
-            pnl_sign = "+" if e["pnl_pct"] >= 0 else ""
-            mos_str  = f" | MoS {e['mos']:.0f}%" if e["mos"] is not None else ""
+            sign    = "+" if e["pnl_pct"] >= 0 else ""
+            mos_str = f" | MoS {e['mos']:.0f}%" if (e["mos"] is not None and -50 <= e["mos"] <= 100) else ""
             msg += (
                 f"*{e['stock_name']}* | {e['score']}/100{mos_str} | "
-                f"*{pnl_sign}{e['pnl_pct']:.1f}%* "
-                f"(₹{e['net_pnl']:+,.0f} net of {e['tax_type']})\n"
-                f"@ ₹{e['buy_price']:.0f} → ₹{e['curr_price']:.0f} | {e['held_days']}d held\n\n"
+                f"*{sign}{e['pnl_pct']:.1f}%* (₹{e['net_pnl']:+,.0f} net)\n"
+                f"₹{e['buy_price']:.0f} → ₹{e['curr_price']:.0f} | {e['held_days']}d held\n\n"
             )
 
     msg += "_AlphaVision | Monitor your investments daily_"
