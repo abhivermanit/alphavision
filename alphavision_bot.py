@@ -663,19 +663,17 @@ def score_valuation(yf_info: Dict, screener: Dict) -> Dict:
     valid_mos = [v for v in mos_vals if v is not None]
     details["best_mos_pct"] = round(max(valid_mos), 1) if valid_mos else None
 
-    # Safe entry price: lower of Graham Number and DCF-implied price, with 10% additional buffer
-    # This is the price at which a deep-value investor would confidently initiate a position
-    safe_prices = []
-    if details.get("graham_number") and details["graham_number"] > 0:
-        safe_prices.append(details["graham_number"] * 0.90)
-    if details.get("mos_dcf_pct") and market_cap > 0 and curr_price > 0:
-        # DCF intrinsic is in Cr (total market cap). Per-share price = intrinsic_cr * 1e7 / shares
-        # Approximate shares = market_cap / curr_price
-        shares_approx = market_cap / max(curr_price, 1)
-        if shares_approx > 0 and details.get("dcf_intrinsic_cr"):
-            dcf_per_share = (details["dcf_intrinsic_cr"] * 1e7) / shares_approx
-            safe_prices.append(dcf_per_share * 0.90)
-    details["safe_entry_price"] = round(min(safe_prices), 2) if safe_prices else None
+    # Safe entry price: derived from DCF intrinsic value per share with a 10% buffer
+    # dcf_intrinsic_cr is total company intrinsic value in ₹ Crores
+    # shares = market_cap (₹) / curr_price
+    safe_entry = None
+    if curr_price > 0 and market_cap > 0 and details.get("dcf_intrinsic_cr"):
+        shares_approx  = market_cap / curr_price          # market_cap is in ₹
+        intrinsic_inr  = details["dcf_intrinsic_cr"] * 1e7  # convert Cr → ₹
+        dcf_per_share  = intrinsic_inr / shares_approx
+        if dcf_per_share > 0:
+            safe_entry = round(dcf_per_share * 0.90, 2)   # 10% buffer below intrinsic
+    details["safe_entry_price"] = safe_entry
     details["current_price"]    = round(curr_price, 2)
 
     return details
@@ -1147,9 +1145,9 @@ def build_info_from_screener(symbol: str, screener: Dict, nse_quote: Dict) -> Di
         debt_latest / max(equity_latest, 1) if equity_latest else 0
     )
 
-    # Book value per share — equity in Cr / shares (shares = market_cap_cr / price)
-    shares_outstanding = (market_cap_cr / price) if price > 0 else 0
-    book_value = (equity_latest / shares_outstanding) if shares_outstanding > 0 else 0
+    # Book value per share — equity in Cr converted to per-share (market_cap_cr / price = shares in Cr units)
+    shares_cr = market_cap_cr / price if price > 0 else 0
+    book_value = (equity_latest / shares_cr) if shares_cr > 0 else 0
 
     # Profit margin
     profit_margin = (pat_latest / max(rev_latest, 1)) * 100 if rev_latest else 0
