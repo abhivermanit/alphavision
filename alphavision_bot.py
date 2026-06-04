@@ -570,12 +570,14 @@ def score_valuation(yf_info: Dict, screener: Dict) -> Dict:
     # 2b. Conservative DCF (7-year)
     fcf_series = [v for v in screener.get("fcf_last5", []) if v is not None]
     fcf_yf     = yf_info.get("freeCashFlow") or 0
-    fcf_base   = sorted(fcf_series)[len(fcf_series) // 2] if fcf_series else fcf_yf  # median
+    # fcf_series values are in ₹ Crores from Screener — convert to ₹ for DCF
+    fcf_series_inr = [v * 1e7 for v in fcf_series]
+    fcf_base   = sorted(fcf_series_inr)[len(fcf_series_inr) // 2] if fcf_series_inr else fcf_yf  # median
 
     if fcf_base and fcf_base > 0 and curr_price > 0 and market_cap > 0:
         # Growth rate: 5-year FCF CAGR capped at 15%, haircut 20%
-        if len(fcf_series) >= 2 and fcf_series[0] and fcf_series[0] > 0:
-            raw_cagr = (fcf_series[-1] / fcf_series[0]) ** (1 / len(fcf_series)) - 1
+        if len(fcf_series_inr) >= 2 and fcf_series_inr[0] and fcf_series_inr[0] > 0:
+            raw_cagr = (fcf_series_inr[-1] / fcf_series_inr[0]) ** (1 / len(fcf_series_inr)) - 1
         else:
             raw_cagr = 0.08  # conservative default
         growth = min(raw_cagr, 0.15) * 0.80  # 20% haircut
