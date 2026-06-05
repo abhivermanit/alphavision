@@ -1446,15 +1446,26 @@ def format_tax_summary(symbol: str, buy_price: float, investment: float,
 
 # ==================== TELEGRAM MESSAGING ====================
 
+# Send to both personal chat and public channel
+TELEGRAM_TARGETS = [
+    TELEGRAM_CHAT_ID,        # personal chat (1358976952)
+    "@alphavision_signals",  # public channel
+]
+
 async def _send(message: str):
     bot = Bot(token=TELEGRAM_TOKEN)
     async with bot:
-        # Split into chunks of 4000 chars to stay under Telegram's 4096 limit
         chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
-        for chunk in chunks:
-            await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=chunk, parse_mode="Markdown")
-            if len(chunks) > 1:
-                await asyncio.sleep(0.5)
+        for target in TELEGRAM_TARGETS:
+            if not target:
+                continue
+            try:
+                for chunk in chunks:
+                    await bot.send_message(chat_id=target, text=chunk, parse_mode="Markdown")
+                    if len(chunks) > 1:
+                        await asyncio.sleep(0.5)
+            except Exception as e:
+                print(f"✗ Telegram error for {target}: {e}")
 
 
 def send_telegram_message(message: str):
