@@ -1,4 +1,4 @@
-# updated 2026-06-04
+# updated 2026-06-05
 requests==2.31.0
 beautifulsoup4==4.12.3
 lxml==5.2.1
@@ -7,4 +7,5 @@ pandas==2.1.4
 numpy==1.26.4
 openai==1.30.0
 python-dotenv==1.0.0
-supabase==2.3.4
+supabase==2.15.0
+httpx==0.27.0
