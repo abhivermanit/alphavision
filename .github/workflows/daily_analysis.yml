@@ -9,6 +9,8 @@ jobs:
   analyse:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: write          # needed to keep workflow active
 
     steps:
       - name: Checkout repo
@@ -32,3 +34,12 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python alphavision_bot.py
+
+      - name: Keep workflow active
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          echo "Last run: $(date -u)" > .last_run
+          git add .last_run
+          git diff --staged --quiet || git commit -m "chore: keep workflow active [skip ci]"
+          git push || true
