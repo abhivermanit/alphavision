@@ -1758,30 +1758,30 @@ def monitor_holdings() -> Optional[str]:
         score_ref = h.get("score_at_buy") or 65
 
         print(f"  [{ticker}]", end=" ", flush=True)
+
+        # Use cached screener data from main scan — avoids re-fetching
+        cached = _screener_cache.get(ticker, {})
+        curr_price = cached.get("current_price") or buy_price
+
+        # Also try to get score from today's results passed in via scan
+        score = score_ref  # default to buy score; updated below if available
+        mos   = None
+        p3    = {}
+
         try:
             result = analyse_stock(ticker)
         except Exception as e:
             print(f"error: {e}")
-            all_ok.append({
-                "ticker": ticker, "stock_name": ticker, "buy_price": buy_price,
-                "curr_price": buy_price, "quantity": quantity, "pnl_total": 0,
-                "pnl_pct": 0.0, "net_pnl": 0, "tax_on_pnl": 0, "tax_type": "—",
-                "held_days": 0, "score": score_ref, "score_ref": score_ref,
-                "mos": None, "red_flags": [f"Analysis error: {str(e)[:50]}"],
-            })
-            continue
+            result = None
 
-        if result is None:
-            print(f"no data — skipping (check ticker '{ticker}' exists on screener.in)")
-            continue
-
-        score      = result.get("composite_score", 0)
-        p2         = result.get("pillar2", {})
-        p3         = result.get("pillar3", {})
-        p5         = result.get("pillar5", {})
-        curr_price = p2.get("current_price") or buy_price
-        sentiment  = p5.get("sentiment_signal", "NEUTRAL")
-        mos        = p2.get("best_mos_pct")
+        if result is not None:
+            score      = result.get("composite_score", score_ref)
+            p2         = result.get("pillar2", {})
+            p3         = result.get("pillar3", {})
+            curr_price = p2.get("current_price") or curr_price
+            mos        = p2.get("best_mos_pct")
+        elif curr_price == buy_price:
+            print(f"no data — using buy price for P&L")
 
         pnl_per_share = curr_price - buy_price
         pnl_total     = round(pnl_per_share * quantity, 2)
@@ -1811,15 +1811,14 @@ def monitor_holdings() -> Optional[str]:
             red_flags.append(f"Score fell {score_ref - score} pts ({score_ref} → {score})")
         if (p3.get("score") or 20) < 8:
             red_flags.append(f"Financial health weak ({p3.get('score','?')}/20)")
-        if sentiment == "EXTREME_GREED_AVOID":
-            red_flags.append("Extreme greed sentiment — consider trimming")
         if mos is not None and -50 <= mos < -20:
             red_flags.append(f"Stock {abs(mos):.0f}% above intrinsic value")
         if pnl_pct <= -10:
             red_flags.append(f"Down {abs(pnl_pct):.1f}% — near stop-loss")
 
+        stock_name = (result.get("stock_name") if result else None) or ticker
         entry = {
-            "ticker": ticker, "stock_name": result.get("stock_name", ticker),
+            "ticker": ticker, "stock_name": stock_name,
             "buy_price": buy_price, "curr_price": curr_price, "quantity": quantity,
             "pnl_total": pnl_total, "pnl_pct": pnl_pct, "net_pnl": net_pnl,
             "tax_on_pnl": tax_on_pnl, "tax_type": tax_type, "held_days": held_days,
